@@ -31,6 +31,7 @@ private:
     std::atomic<bool> speaking_{false};
     std::atomic<unsigned> turn_{0};
     std::atomic<int> emotion_{0};
+    std::atomic<bool> diagnostics_{false};
     void Run();
     void Console();
     void RegisterTools();

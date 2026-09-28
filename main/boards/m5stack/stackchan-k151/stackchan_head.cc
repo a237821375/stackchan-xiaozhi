@@ -8,6 +8,9 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include "factory_axis.h"
+#include "factory_upstream/ftservo/SCSCL.h"
+#include "factory_upstream/smooth_ui_toolkit/src/core/hal/hal.hpp"
 #include "mcp_server.h"
 #include "servo_power.h"
 #include "servo_protocol.h"
@@ -22,37 +25,27 @@ constexpr int kYawZero = 461, kPitchZero = 610;
 int64_t Now() { return esp_timer_get_time() / 1000; }
 int Raw(float angle, int zero) { return zero + static_cast<int>(std::lround(angle * 3.2f)); }
 float Degrees(int raw, int zero) { return (raw - zero) / 3.2f; }
-bool Exchange(uint8_t id, uint8_t instruction, const Bytes& parameters, size_t size, Bytes& data) {
-    auto request = Packet(id, instruction, parameters);
-    uart_flush_input(kUart);
-    if (uart_write_bytes(kUart, request.data(), request.size()) != static_cast<int>(request.size()))
-        return false;
-    Bytes reply(size + 6);
-    size_t received = 0;
-    auto deadline = Now() + 25;
-    while (received < reply.size() && Now() < deadline) {
-        int n = uart_read_bytes(kUart, reply.data() + received, reply.size() - received,
-                                pdMS_TO_TICKS(10));
-        if (n > 0)
-            received += n;
-    }
-    reply.resize(received);
-    return Reply(reply, id, size, data);
+SCSCL factory_bus;
+bool BusOk(int result, int expected, uint8_t id) {
+    const bool ok =
+        result == expected && factory_bus.getLastError() == 0 && factory_bus.getState() == 0;
+    static unsigned logged = 0;
+    if (!ok && logged++ < 8)
+        ESP_LOGW(kTag, "Factory bus id=%u result=%d expected=%d transport_error=%u servo_status=%u",
+                 id, result, expected, factory_bus.getLastError(), factory_bus.getState());
+    return ok;
 }
 bool Read(uint8_t id, uint8_t reg, uint8_t size, Bytes& data) {
-    return Exchange(id, 2, {reg, size}, size, data);
+    data.resize(size);
+    return BusOk(factory_bus.Read(id, reg, data.data(), size), size, id);
 }
 bool Write(uint8_t id, const Bytes& data) {
-    Bytes ack;
-    return Exchange(id, 3, data, 0, ack);
+    // Runtime torque only. EEPROM/mode/calibration methods are not exposed.
+    if (data.size() != 2 || data[0] != 40)
+        return false;
+    return BusOk(factory_bus.EnableTorque(id, data[1]), 1, id);
 }
-bool Position(uint8_t id, int raw) {
-    Bytes p{42};
-    AddWord(p, raw);
-    AddWord(p, 50);
-    AddWord(p, 0);
-    return Write(id, p);
-}
+bool Position(uint8_t id, int raw) { return BusOk(factory_bus.WritePos(id, raw, 20, 0), 1, id); }
 struct Feedback {
     int raw = -1, load = 0, current = 0;
 };
@@ -100,18 +93,9 @@ void StackchanHead::Start(i2c_master_bus_handle_t bus) {
     }
     ESP_LOGI(kTag, "PY32 VM_EN enabled and read-back verified");
     vTaskDelay(pdMS_TO_TICKS(200));
-    uart_config_t cfg{};
-    cfg.baud_rate = 1000000;
-    cfg.data_bits = UART_DATA_8_BITS;
-    cfg.parity = UART_PARITY_DISABLE;
-    cfg.stop_bits = UART_STOP_BITS_1;
-    cfg.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
-    cfg.source_clk = UART_SCLK_DEFAULT;
-    // Official K151 SCSerial::begin(UART1, 1Mbps, TX=6, RX=7).
-    if (uart_driver_install(kUart, 512, 512, 0, nullptr, 0) != ESP_OK ||
-        uart_param_config(kUart, &cfg) != ESP_OK ||
-        uart_set_pin(kUart, 6, 7, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE) != ESP_OK) {
-        ESP_LOGE(kTag, "UART unavailable; head motion disabled");
+    // Use the exact official SCSerial UART initialization and packet driver.
+    if (!factory_bus.begin(kUart, 1000000, 6, 7)) {
+        ESP_LOGE(kTag, "Factory UART unavailable; head disabled");
         return;
     }
     RegisterTools();
@@ -165,6 +149,8 @@ std::string StackchanHead::Submit(Action action, Pose pose, bool local) {
     if (action != Action::Arm && action != Action::Approve && action != Action::Stop &&
         action != Action::Resume && !status_.armed)
         return "rejected: local head calibration check has not been armed";
+    ESP_LOGI(kTag, "Command source=%s action=%d yaw=%.2f pitch=%.2f", local ? "USB" : "AI",
+             int(action), pose.yaw, pose.pitch);
     command_ = Command{action, pose};
     return "accepted: queued; get_head_position reports actual position and completion";
 }
@@ -199,18 +185,35 @@ void StackchanHead::Run() {
     }
     bool first = true, torque = false;
     AxisStall yaw_stall, pitch_stall;
-    SlewAxis yaw_slew, pitch_slew;
+    smooth_ui_toolkit::ui_hal::on_get_tick([] { return static_cast<uint32_t>(Now()); });
+    Pose current;
+    FactoryAxis yaw_axis(
+        kYawZero, -30, 30, [&] { return current.yaw; }, [](int raw) { return Position(1, raw); });
+    FactoryAxis pitch_axis(
+        kPitchZero, 5, 60, [&] { return current.pitch; }, [](int raw) { return Position(2, raw); });
     unsigned current_turn = 0;
     TorqueSafety torque_safety;
     int64_t last_log = 0;
     while (true) {
+        if (diagnostics_.exchange(false)) {
+            for (uint8_t id : {1, 2}) {
+                Bytes registers;
+                if (Read(id, 40, 8, registers))
+                    ESP_LOGI(kTag, "Servo %u torque=%u stored_goal=%d time=%d speed=%d", id,
+                             registers[0], Word(registers.data() + 2), Word(registers.data() + 4),
+                             Word(registers.data() + 6));
+            }
+        }
         Feedback yaw, pitch;
         const bool yaw_ok = FeedbackOf(1, yaw);
         const bool pitch_ok = FeedbackOf(2, pitch);
         bool read_ok = yaw_ok && pitch_ok;
         const auto now = Now();
-        Pose current{Degrees(yaw.raw, kYawZero), Degrees(pitch.raw, kPitchZero)};
+        current = {Degrees(yaw.raw, kYawZero), Degrees(pitch.raw, kPitchZero)};
         bool valid = read_ok && mode_ok && Policy::Safe(current);
+        if (!valid && !policy.fault())
+            ESP_LOGW(kTag, "Invalid feedback yaw_ok=%d pitch_ok=%d mode_ok=%d raw=%d/%d", yaw_ok,
+                     pitch_ok, mode_ok, yaw.raw, pitch.raw);
         policy.Feedback(current, valid, now);
         if (first && valid && approved)
             policy.Arm(now);
@@ -227,8 +230,8 @@ void StackchanHead::Run() {
             command_.reset();
         }
         if (cmd) {
-            yaw_slew.Reset(current.yaw);
-            pitch_slew.Reset(current.pitch);
+            yaw_axis.Reset(current.yaw);
+            pitch_axis.Reset(current.pitch);
             switch (cmd->action) {
                 case Action::Arm:
                     policy.Arm(now, false);
@@ -296,14 +299,16 @@ void StackchanHead::Run() {
                 ok = Position(1, yaw.raw) && Position(2, pitch.raw) && Write(1, {40, 1}) &&
                      Write(2, {40, 1});
                 torque = ok;
-                yaw_slew.Reset(current.yaw);
-                pitch_slew.Reset(current.pitch);
+                yaw_axis.Reset(current.yaw);
+                pitch_axis.Reset(current.pitch);
             }
-            if (ok && moving) {
-                Pose next{yaw_slew.Step(current.yaw, target->yaw),
-                          pitch_slew.Step(current.pitch, target->pitch)};
-                ok = Position(1, Raw(next.yaw, kYawZero)) &&
-                     Position(2, Raw(next.pitch, kPitchZero));
+            if (ok) {
+                yaw_axis.Target(target->yaw);
+                pitch_axis.Target(target->pitch);
+                yaw_axis.update();
+                if (!yaw_axis.failed())
+                    pitch_axis.update();
+                ok = !yaw_axis.failed() && !pitch_axis.failed();
             }
             if (!ok) {
                 policy.Fault();
@@ -326,7 +331,7 @@ void StackchanHead::Run() {
             ESP_LOGI(kTag, "%s", StatusJson().c_str());
             last_log = now;
         }
-        vTaskDelay(pdMS_TO_TICKS(50));
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
 void StackchanHead::Console() {
@@ -345,7 +350,10 @@ void StackchanHead::Console() {
             std::string result;
             if (strcmp(line, "head status") == 0)
                 result = StatusJson();
-            else if (strcmp(line, "head arm") == 0)
+            else if (strcmp(line, "head diag") == 0) {
+                diagnostics_.store(true);
+                result = "read-only diagnostics queued";
+            } else if (strcmp(line, "head arm") == 0)
                 result = Submit(Action::Arm, {}, true);
             else if (strcmp(line, "head approve") == 0)
                 result = Submit(Action::Approve, {}, true);

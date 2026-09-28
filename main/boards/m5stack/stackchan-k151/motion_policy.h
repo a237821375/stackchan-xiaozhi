@@ -4,19 +4,6 @@
 #include <cstdint>
 #include <optional>
 namespace stackchan {
-class SlewAxis {
-public:
-    void Reset(float current) { command_ = current; }
-    float Step(float current, float target) {
-        command_ += std::clamp(target - command_, -.4f, .4f);
-        // Cross the encoder deadband without getting more than 2 degrees ahead.
-        command_ = std::clamp(command_, current - 2.f, current + 2.f);
-        return command_;
-    }
-
-private:
-    float command_ = 0;
-};
 inline bool RemoteMotionAllowed(bool approved, bool armed) { return approved && armed; }
 class TorqueSafety {
 public:

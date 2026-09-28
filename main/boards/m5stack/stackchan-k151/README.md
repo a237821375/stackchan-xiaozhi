@@ -6,7 +6,7 @@
 
 启动时按原厂流程通过 I2C 0x6f 的 PY32 扩展器 pin 0 开启 VM_EN 舵机电源；对方向、上下拉和输出寄存器逐项读改写及回读，不改其它引脚。等待舵机启动并有限次重试读取限位。首次启动只读取舵机寄存器诊断，不自动回正或使能扭矩。默认活动边界 yaw -30..30°、pitch 5..60°，回正位置 (0,10)；pitch 是原厂坐标，不是以水平 0° 为原点的倾角。需先实测方向和安全范围。
 
-USB 控制台维护命令：`head status`；有效反馈后 `head arm` 临时启用；`head probe yaw` / `head probe pitch` 各增量 2°；`head stop`；`head center`。确认硬件后 `head approve` 仅在新 NVS 命名空间 `head_ctl/verified` 中记录验收标志，后续启动仍先读取反馈，不强制回正。AI 无权执行本地校准验收命令。
+USB 控制台维护命令：`head status` / `head diag`（只读寄存器诊断）；有效反馈后 `head arm` 临时启用；`head probe yaw` / `head probe pitch` 各增量 2°；`head stop`；`head center`。确认硬件后 `head approve` 仅在新 NVS 命名空间 `head_ctl/verified` 中记录验收标志，后续启动仍先读取反馈，不强制回正。AI 无权执行本地校准验收命令。
 
 AI 工具：`self.robot.get_head_position`、`set_head_pose`、`adjust_head`、`head_action`。入队返回 accepted 并非已到位；状态查询提供反馈和目标。首次硬件未验收时工具会报告未启用。停止保持当前姿态并关闭微动作；恢复需已验收和有效反馈。
 
@@ -16,4 +16,4 @@ AI 工具：`self.robot.get_head_position`、`set_head_pose`、`adjust_head`、`
 
 上游测试：`python -m unittest discover -s scripts/tests -v`。本地策略与协议测试：`bash tools/test_stackchan.sh`。
 
-运动轨迹以先前下发目标为基准每周期推进至多 0.4°，最多领先反馈 2°，避免目标始终困在编码器死区。任一轴连续 1.2 秒无进展或过载会停机并释放扭矩；停止/新指令重置轨迹。
+运动链路复用原厂 Servo 的弹簧动画、速度映射和结束补发，并调用原厂 FTServo 的 WritePos(id, raw, 20, 0)。自然速度采用原厂 MCP 默认 150。每 20 ms 更新一次，实际周期还包含串口通信时间。任一轴连续 1.2 秒无进展或过载会停机并释放扭矩；停止/新指令重置动画。来源和许可详见 factory_upstream/README.md。

@@ -5,16 +5,6 @@
 using namespace stackchan;
 bool near(float a, float b) { return std::abs(a - b) < .01f; }
 int main() {
-    // A real servo ignores targets inside its deadband: the command trajectory
-    // must advance even while feedback has not moved, but never run far ahead.
-    stackchan::SlewAxis slew;
-    slew.Reset(20);
-    for (int i = 0; i < 10; ++i)
-        slew.Step(20, 30);
-    assert(slew.Step(20, 30) > 20.9f);
-    assert(slew.Step(20, 30) <= 22.001f);
-    slew.Reset(20);
-    assert(slew.Step(20, 10) >= 19.59f);
     TorqueSafety safety;
     assert(!safety.ReleaseOnFault(true));  // read-only startup
     safety.BeginWrite();
