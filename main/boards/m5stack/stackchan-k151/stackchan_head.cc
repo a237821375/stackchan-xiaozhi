@@ -34,9 +34,11 @@ bool BusOk(int result, int expected, uint8_t id) {
     const bool ok =
         result == expected && factory_bus.getLastError() == 0 && factory_bus.getState() == 0;
     static unsigned logged = 0;
-    if (!ok && logged++ < 8)
+    if (!ok && logged++ < 8) {
         ESP_LOGW(kTag, "Factory bus id=%u result=%d expected=%d transport_error=%u servo_status=%u",
                  id, result, expected, factory_bus.getLastError(), factory_bus.getState());
+        factory_bus.DumpFailure();
+    }
     return ok;
 }
 bool Read(uint8_t id, uint8_t reg, uint8_t size, Bytes& data) {
