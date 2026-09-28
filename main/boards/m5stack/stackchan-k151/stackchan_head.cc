@@ -42,20 +42,36 @@ bool Read(uint8_t id, uint8_t reg, uint8_t size, Bytes& data) {
     data.resize(size);
     return BusOk(factory_bus.Read(id, reg, data.data(), size), size, id);
 }
+void RecoverBus() {
+    // Wait beyond the factory 10 ms receive timeout so a delayed response cannot
+    // be mistaken for the next transaction. This worker is the sole bus owner.
+    vTaskDelay(pdMS_TO_TICKS(20));
+    uart_flush_input(kUart);
+}
 bool Write(uint8_t id, const Bytes& data) {
     // Runtime torque only. EEPROM/mode/calibration methods are not exposed.
     if (data.size() != 2 || data[0] != 40)
         return false;
-    return BusOk(factory_bus.EnableTorque(id, data[1]), 1, id);
+    return WithBusRecovery(
+        [&] { return BusOk(factory_bus.EnableTorque(id, data[1]), 1, id); },
+        [] { return ServoReportedAlarm(factory_bus.getLastError(), factory_bus.getState()); },
+        RecoverBus);
 }
-bool Position(uint8_t id, int raw) { return BusOk(factory_bus.WritePos(id, raw, 20, 0), 1, id); }
+bool Position(uint8_t id, int raw) {
+    return WithBusRecovery(
+        [&] { return BusOk(factory_bus.WritePos(id, raw, 20, 0), 1, id); },
+        [] { return ServoReportedAlarm(factory_bus.getLastError(), factory_bus.getState()); },
+        RecoverBus);
+}
 struct Feedback {
     int raw = -1, load = 0, current = 0;
 };
 bool FeedbackOf(uint8_t id, Feedback& f) {
     Bytes p;
-    if (!ReadFeedbackWithRetry([&] { return Read(id, 56, 15, p); },
-                               [] { return factory_bus.getState() != 0; }))
+    if (!WithBusRecovery(
+            [&] { return Read(id, 56, 15, p); },
+            [] { return ServoReportedAlarm(factory_bus.getLastError(), factory_bus.getState()); },
+            RecoverBus))
         return false;
     f.raw = Word(p.data());
     f.load = Word(p.data() + 4) & 0x3ff;

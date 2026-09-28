@@ -3,6 +3,19 @@
 #include <vector>
 namespace stackchan {
 using Bytes = std::vector<uint8_t>;
+inline bool ServoReportedAlarm(int transport_error, int status) {
+    return transport_error == 0 && status != 0;
+}
+// Retry only idempotent runtime operations, after draining a late response.
+template <typename Operation, typename Alarm, typename Recover>
+bool WithBusRecovery(Operation operation, Alarm alarm, Recover recover) {
+    if (operation())
+        return true;
+    if (alarm())
+        return false;
+    recover();
+    return operation();
+}
 // A missed UART reply is retried once; never reuse stale data or mask an alarm.
 template <typename Read, typename Alarm>
 bool ReadFeedbackWithRetry(Read read, Alarm alarm) {

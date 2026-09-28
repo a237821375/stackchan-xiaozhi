@@ -23,3 +23,5 @@ AI 工具：`self.robot.get_head_position`、`set_head_pose`、`adjust_head`、`
 参考原厂固定版本1b5765599fba8aaad1811d9a79358ccc7051f5f3的 hal/hal_head_touch.cpp、hal/drivers/Si12T/Si12T.cpp、stackchan/modifiers/idle_motion.h 和 head_pet.h。移植其硬件参数、随机间隔和松手恢复语义，适配现有GIF和运动策略；本版轻触即可回应，不要求完成原厂滑动手势，现有 loving GIF 替代原厂程序绘制的爱心装饰。
 
 反馈边界采用与到位判定相同的2.5°容差，避免目标5°附近反馈4.69°时锁死；命令范围仍为yaw±30°、pitch5～60°，从实际姿态建立或恢复的策略目标也会限幅。容差之外、串口无效或过载仍停机。
+
+运行时舵机反馈、位置和扭矩操作遇到通信校验/超时错误时，等待20ms并清除迟到数据后只重试一次。相同位置和扭矩写入可重复执行；舵机报警不重试，连续失败仍停机，无旧反馈替代。

@@ -38,6 +38,37 @@ protected:
 };
 int main() {
     using namespace stackchan;
+    assert(ServoReportedAlarm(0, 1));
+    assert(!ServoReportedAlarm(1, 1));  // stale alarm after a new missing reply is not valid
+    bool recovered = false;
+    int calls = 0, recoveries = 0;
+    assert(WithBusRecovery(
+        [&] {
+            ++calls;
+            return recovered;
+        },
+        [] { return false; },
+        [&] {
+            recovered = true;
+            ++recoveries;
+        }));
+    assert(calls == 2 && recoveries == 1);
+    calls = recoveries = 0;
+    assert(!WithBusRecovery(
+        [&] {
+            ++calls;
+            return false;
+        },
+        [] { return false; }, [&] { ++recoveries; }));
+    assert(calls == 2 && recoveries == 1);
+    calls = recoveries = 0;
+    assert(!WithBusRecovery(
+        [&] {
+            ++calls;
+            return false;
+        },
+        [] { return true; }, [&] { ++recoveries; }));
+    assert(calls == 1 && recoveries == 0);
     int attempts = 0;
     assert(ReadFeedbackWithRetry([&] { return ++attempts == 2; }, [] { return false; }));
     assert(attempts == 2);
