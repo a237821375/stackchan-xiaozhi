@@ -16,4 +16,4 @@ AI 工具：`self.robot.get_head_position`、`set_head_pose`、`adjust_head`、`
 
 上游测试：`python -m unittest discover -s scripts/tests -v`。本地策略与协议测试：`bash tools/test_stackchan.sh`。
 
-运动链路复用原厂 Servo 的弹簧动画、速度映射和结束补发，并调用原厂 FTServo 的 WritePos(id, raw, 20, 0)。自然速度采用原厂 MCP 默认 150。每 20 ms 更新一次，实际周期还包含串口通信时间。任一轴连续 1.2 秒无进展或过载会停机并释放扭矩；停止/新指令重置动画。来源和许可详见 factory_upstream/README.md。
+运动链路复用原厂 Servo 的弹簧动画、速度映射和结束补发，并调用原厂 FTServo 的 WritePos(id, raw, 20, 0)。自然速度采用原厂 MCP 默认 150。每 20 ms 更新一次，实际周期还包含串口通信时间。目标误差不足原厂 8 编码刻度（2.5°）时不判定停滞；超出容差的任一轴连续 1.2 秒无进展或运动中过载会停机并释放扭矩。停止/新指令重置动画。来源和许可详见 factory_upstream/README.md。

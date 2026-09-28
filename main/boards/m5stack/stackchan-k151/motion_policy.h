@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <optional>
 namespace stackchan {
+// Factory hal_servo.cpp excludes target errors below eight encoder ticks.
+inline constexpr float kSettleToleranceDegrees = 8.f / 3.2f;
 inline bool RemoteMotionAllowed(bool approved, bool armed) { return approved && armed; }
 class TorqueSafety {
 public:
@@ -22,7 +24,7 @@ private:
 class AxisStall {
 public:
     bool Update(float current, float target, int64_t now) {
-        if (std::abs(target - current) <= 1) {
+        if (std::abs(target - current) < kSettleToleranceDegrees) {
             tracking_ = false;
             return false;
         }

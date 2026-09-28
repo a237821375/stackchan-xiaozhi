@@ -22,6 +22,11 @@ int main() {
     assert(!RemoteMotionAllowed(false, true));
     assert(!RemoteMotionAllowed(true, false));
     assert(RemoteMotionAllowed(true, true));
+    // Real hardware settles four encoder ticks (1.25 degrees) from center.
+    // The factory driver ignores stall detection inside eight encoder ticks.
+    AxisStall settled;
+    for (int t = 0; t <= 3000; t += 100)
+        assert(!settled.Update(1.25f, 0, t));
     AxisStall yaw_stall, pitch_stall;
     for (int t = 0; t <= 1300; t += 50) {
         bool stopped = yaw_stall.Update(0, 10, t);

@@ -136,7 +136,9 @@ std::string StackchanHead::Submit(Action action, Pose pose, bool local) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!local && action != Action::Stop && action != Action::Resume &&
         !RemoteMotionAllowed(status_.approved, status_.armed))
-        return "rejected: local head movement verification required";
+        return !status_.approved ? "rejected: local head movement verification required"
+                                 : "rejected: motion stopped after a fault; check head position "
+                                   "and obstruction, then use resume";
     if (action != Action::Stop && !status_.valid)
         return "rejected: head feedback unavailable or outside safe range";
     if (action == Action::Move && !Policy::Safe(pose))
@@ -275,8 +277,10 @@ void StackchanHead::Run() {
         policy.Emotion(emotion_.load());
         policy.Speaking(speaking_.load(), now);
         auto target = policy.Step(now);
-        bool moving = target && (std::abs(target->yaw - current.yaw) > 1 ||
-                                 std::abs(target->pitch - current.pitch) > 1);
+        bool moving =
+            target && (std::abs(target->yaw - current.yaw) >= kSettleToleranceDegrees ||
+                       std::abs(target->pitch - current.pitch) >= kSettleToleranceDegrees ||
+                       yaw_axis.isMoving() || pitch_axis.isMoving());
         if (moving && valid) {
             const bool yaw_stuck = yaw_stall.Update(current.yaw, target->yaw, now);
             const bool pitch_stuck = pitch_stall.Update(current.pitch, target->pitch, now);
