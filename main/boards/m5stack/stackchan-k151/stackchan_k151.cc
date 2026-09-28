@@ -341,7 +341,7 @@ public:
         InitializeCamera();
         InitializeFt6336TouchPad();
         GetBacklight()->RestoreBrightness();
-        head_.Start();
+        head_.Start(i2c_bus_);
     }
 
     virtual AudioCodec* GetAudioCodec() override {

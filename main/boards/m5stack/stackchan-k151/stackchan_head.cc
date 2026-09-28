@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include "mcp_server.h"
+#include "servo_power.h"
 #include "servo_protocol.h"
 #include "settings.h"
 
@@ -64,16 +65,41 @@ bool FeedbackOf(uint8_t id, Feedback& f) {
     f.current = Word(p.data() + 13) & 0x7fff;
     return f.raw >= 0 && f.raw <= 1000;
 }
-float Approach(float from, float to) { return from + std::clamp(to - from, -.4f, .4f); }
 }  // namespace
 
-void StackchanHead::Start() {
+void StackchanHead::Start(i2c_master_bus_handle_t bus) {
     uint8_t mac[6]{};
     constexpr uint8_t calibrated_unit[6] = {0x80, 0x45, 0x6b, 0x4d, 0x3a, 0x94};
     if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK || memcmp(mac, calibrated_unit, 6) != 0) {
         ESP_LOGE(kTag, "Calibration belongs to another unit; head disabled");
         return;
     }
+    i2c_device_config_t power_cfg{};
+    power_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    power_cfg.device_address = 0x6f;
+    power_cfg.scl_speed_hz = 100000;
+    i2c_master_dev_handle_t power = nullptr;
+    if (i2c_master_bus_add_device(bus, &power_cfg, &power) != ESP_OK)
+        return;
+    auto read_power = [power](uint8_t reg, uint8_t& value) {
+        return i2c_master_transmit_receive(power, &reg, 1, &value, 1, 100) == ESP_OK;
+    };
+    auto write_power = [power](uint8_t reg, uint8_t value) {
+        const uint8_t bytes[]{reg, value};
+        return i2c_master_transmit(power, bytes, sizeof(bytes), 100) == ESP_OK;
+    };
+    bool powered = false;
+    for (int attempt = 0; attempt < 6 && !powered; ++attempt) {
+        vTaskDelay(pdMS_TO_TICKS(200));
+        powered = EnableServoPower(read_power, write_power);
+    }
+    i2c_master_bus_rm_device(power);
+    if (!powered) {
+        ESP_LOGE(kTag, "PY32 VM_EN unavailable; head disabled");
+        return;
+    }
+    ESP_LOGI(kTag, "PY32 VM_EN enabled and read-back verified");
+    vTaskDelay(pdMS_TO_TICKS(200));
     uart_config_t cfg{};
     cfg.baud_rate = 1000000;
     cfg.data_bits = UART_DATA_8_BITS;
@@ -153,7 +179,13 @@ void StackchanHead::Run() {
     bool mode_ok = true;
     for (uint8_t id : {1, 2}) {
         Bytes p;
-        if (!Read(id, 9, 4, p)) {
+        bool got_range = false;
+        for (int attempt = 0; attempt < 6 && !got_range; ++attempt) {
+            got_range = Read(id, 9, 4, p);
+            if (!got_range)
+                vTaskDelay(pdMS_TO_TICKS(200));
+        }
+        if (!got_range) {
             mode_ok = false;
             continue;
         }
@@ -162,9 +194,12 @@ void StackchanHead::Run() {
         const int required_low = id == 1 ? Raw(-30, kYawZero) : Raw(5, kPitchZero);
         const int required_high = id == 1 ? Raw(30, kYawZero) : Raw(60, kPitchZero);
         mode_ok = mode_ok && high > low && low <= required_low && high >= required_high;
+        if (Read(id, 26, 2, p))
+            ESP_LOGI(kTag, "Servo %u deadband CW=%u CCW=%u ticks", id, p[0], p[1]);
     }
     bool first = true, torque = false;
     AxisStall yaw_stall, pitch_stall;
+    SlewAxis yaw_slew, pitch_slew;
     unsigned current_turn = 0;
     TorqueSafety torque_safety;
     int64_t last_log = 0;
@@ -192,6 +227,8 @@ void StackchanHead::Run() {
             command_.reset();
         }
         if (cmd) {
+            yaw_slew.Reset(current.yaw);
+            pitch_slew.Reset(current.pitch);
             switch (cmd->action) {
                 case Action::Arm:
                     policy.Arm(now, false);
@@ -244,7 +281,8 @@ void StackchanHead::Run() {
                 yaw.current >= 350 || pitch.current >= 350) {
                 policy.Fault();
                 target.reset();
-                ESP_LOGE(kTag, "Head stalled/overloaded; targets stopped");
+                ESP_LOGE(kTag, "Head stopped: stuck=%d/%d load=%d/%d current=%d/%d", yaw_stuck,
+                         pitch_stuck, yaw.load, pitch.load, yaw.current, pitch.current);
             }
         } else {
             yaw_stall.Reset();
@@ -258,10 +296,12 @@ void StackchanHead::Run() {
                 ok = Position(1, yaw.raw) && Position(2, pitch.raw) && Write(1, {40, 1}) &&
                      Write(2, {40, 1});
                 torque = ok;
+                yaw_slew.Reset(current.yaw);
+                pitch_slew.Reset(current.pitch);
             }
             if (ok && moving) {
-                Pose next{Approach(current.yaw, target->yaw),
-                          Approach(current.pitch, target->pitch)};
+                Pose next{yaw_slew.Step(current.yaw, target->yaw),
+                          pitch_slew.Step(current.pitch, target->pitch)};
                 ok = Position(1, Raw(next.yaw, kYawZero)) &&
                      Position(2, Raw(next.pitch, kPitchZero));
             }

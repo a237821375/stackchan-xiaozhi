@@ -1,4 +1,5 @@
 #pragma once
+#include <driver/i2c_master.h>
 #include <atomic>
 #include <mutex>
 #include <optional>
@@ -7,7 +8,7 @@
 
 class StackchanHead {
 public:
-    void Start();
+    void Start(i2c_master_bus_handle_t bus);
     void SetSpeaking(bool value) { speaking_.store(value); }
     void BeginSpeech() { turn_.fetch_add(1); }
     void SetEmotion(const std::string& emotion);
