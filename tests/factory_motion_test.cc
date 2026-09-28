@@ -23,9 +23,9 @@ int main() {
     axis.Reset(actual);
     assert(writes == 0);  // adopting feedback must not command the device
     axis.Target(0);
-    for (now = 20; now <= 500; now += 20)
+    for (now = 20; now <= 360; now += 20)
         axis.update();
-    assert(std::abs(actual) < 2.f);  // App speed 500 settles promptly.
+    assert(std::abs(actual) < 2.f);  // Faster profile must settle within 360 ms.
     for (; now <= 6000; now += 20)
         axis.update();
     assert(writes > 20 && last == 461 && std::abs(actual) < 1);
@@ -84,9 +84,9 @@ int main() {
         }
         std::cout << "gesture " << shake << " excursion=" << low - base << ".." << high - base
                   << std::endl;
-        assert(high - base >= 4.f);
+        assert(high - base >= (shake ? 15.f : 10.f));
         if (shake)
-            assert(base - low >= 4.f);
+            assert(base - low >= 15.f);
         assert(std::abs(angle - base) < 1.f);
     }
     std::cout << "factory spring trajectory: PASS\n";

@@ -10,10 +10,10 @@ USB 控制台维护命令：`head status` / `head diag`（只读寄存器诊断�
 
 AI 工具：`self.robot.get_head_position`、`set_head_pose`、`adjust_head`、`head_action`。入队返回 accepted 并非已到位；状态查询提供反馈和目标。首次硬件未验收时工具会报告未启用。停止保持当前姿态并关闭微动作；恢复需已验收和有效反馈。
 
-讲话微动作每轮最多两次，间隔至少 4.5 秒，默认约 3°。明确点头使用 8°/6° 两次动作，摇头使用 ±12°/±10° 两次往返，每段 450 ms（边界处限幅）。讲话微动作仍为 3°、每段 450 ms。明确姿态指令取消本轮微动作；下一轮围绕新姿态运动。嘴巴由播放状态选择 `<emotion>` / `<emotion>_talk` 素材，sleepy 不切换；这不是音素级唇形同步。资源包需使用 `tools/build_stackchan_assets.py` 生成，约 5.2 MB，保留唤醒词/字体与 hide_subtitle。
+讲话微动作每轮最多两次，间隔至少 4.5 秒，默认约 3°。明确点头使用 12°/10° 两次动作，摇头使用 ±18°/±15° 两次往返，每段 400 ms（边界处限幅）。讲话微动作仍为 3°、每段 450 ms。明确姿态指令取消本轮微动作；下一轮围绕新姿态运动。嘴巴由播放状态选择 `<emotion>` / `<emotion>_talk` 素材，sleepy 不切换；这不是音素级唇形同步。资源包需使用 `tools/build_stackchan_assets.py` 生成，约 5.2 MB，保留唤醒词/字体与 hide_subtitle。
 
 构建：激活 ESP-IDF 6.0.1 后运行 `python scripts/build.py m5stack/stackchan-k151 --name m5stack-stackchan-k151 --language zh-CN --wake-word nihaoxiaozhi`。禁止直接运行整包烧录命令覆盖分区/NVS；检查本地部署记录并保留整机备份。
 
 上游测试：`python -m unittest discover -s scripts/tests -v`。本地策略与协议测试：`bash tools/test_stackchan.sh`。
 
-运动链路复用原厂 Servo 的弹簧动画、速度映射和结束补发，并调用原厂 FTServo 的 WritePos(id, raw, 20, 0)。速度采用原厂 App MotionDataItem 默认 500（app/lib/model/expression_data.dart，固定版本 1b5765599fba8aaad1811d9a79358ccc7051f5f3），不是 MCP 的默认 150。控制任务以 20 ms 为目标周期，串口工作计入周期，超时后不连续补帧。目标误差不足原厂 8 编码刻度（2.5°）时不判定停滞；超出容差的任一轴连续 1.2 秒无进展或运动中过载会停机并释放扭矩。停止/新指令重置动画。来源和许可详见 factory_upstream/README.md。
+运动链路复用原厂 Servo 的弹簧动画、速度映射和结束补发，并调用原厂 FTServo 的 WritePos(id, raw, 20, 0)。原厂 App MotionDataItem 默认速度为 500；按用户偏好，本版提高为 650（app/lib/model/expression_data.dart，固定版本 1b5765599fba8aaad1811d9a79358ccc7051f5f3），不是 MCP 的默认 150。控制任务以 20 ms 为目标周期，串口工作计入周期，超时后不连续补帧。目标误差不足原厂 8 编码刻度（2.5°）时不判定停滞；超出容差的任一轴连续 1.2 秒无进展或运动中过载会停机并释放扭矩。停止/新指令重置动画。来源和许可详见 factory_upstream/README.md。

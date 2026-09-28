@@ -24,7 +24,7 @@ public:
         if (target == target_)
             return;
         target_ = target;
-        moveWithSpeed(target_, 500);  // official App MotionDataItem default speed
+        moveWithSpeed(target_, 650);  // user-selected faster profile; App default is 500
     }
     int getCurrentAngle() override { return static_cast<int>(feedback_() * 10); }
     bool failed() const { return failed_; }
