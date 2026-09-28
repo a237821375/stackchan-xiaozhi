@@ -50,7 +50,7 @@ int main() {
     p.Feedback({10, 20}, true, 100);
     assert(p.Gesture(false, 200));
     goal = p.Step(200);
-    assert(goal && goal->pitch > 20 && goal->pitch <= 26);
+    assert(goal && goal->pitch > 20 && goal->pitch <= 28);
     assert(p.Move({-10, 25}, 300));
     goal = p.Step(1500);
     assert(!goal && p.fault());

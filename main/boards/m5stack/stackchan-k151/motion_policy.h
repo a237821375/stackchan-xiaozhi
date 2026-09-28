@@ -122,17 +122,25 @@ public:
             return std::nullopt;
         if (gesture_) {
             auto age = now - gesture_at_;
-            // Allow the factory speed-150 spring to reach each waypoint before
-            // reversing. Explicit gestures must remain visible through backlash.
-            const int64_t phase_ms = auto_gesture_ ? 1000 : 1400;
-            const float amplitude = auto_gesture_ ? 3.f : 6.f;
-            if (age >= phase_ms * (shake_ ? 3 : 2)) {
+            // App speed 500: two explicit cycles, with a softer second cycle.
+            const int64_t phase_ms = 450;
+            const int phases = auto_gesture_ ? (shake_ ? 3 : 2) : (shake_ ? 5 : 4);
+            if (age >= phase_ms * phases) {
                 gesture_ = auto_gesture_ = false;
                 target_ = base_;
             } else {
                 target_ = base_;
-                float delta =
-                    age < phase_ms ? amplitude : (age < phase_ms * 2 && shake_ ? -amplitude : 0.f);
+                const int phase = age / phase_ms;
+                float delta;
+                if (auto_gesture_)
+                    delta = phase == 0 ? 3.f : (phase == 1 && shake_ ? -3.f : 0.f);
+                else if (shake_) {
+                    constexpr float waypoints[] = {12.f, -12.f, 10.f, -10.f, 0.f};
+                    delta = waypoints[phase];
+                } else {
+                    constexpr float waypoints[] = {8.f, 0.f, 6.f, 0.f};
+                    delta = waypoints[phase] * (base_.pitch > 52.f ? -1.f : 1.f);
+                }
                 if (shake_)
                     target_.yaw = std::clamp(base_.yaw + delta, -30.f, 30.f);
                 else

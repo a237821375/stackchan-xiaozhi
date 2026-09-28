@@ -24,7 +24,7 @@ public:
         if (target == target_)
             return;
         target_ = target;
-        moveWithSpeed(target_, 150);  // official MCP's natural-motion speed
+        moveWithSpeed(target_, 500);  // official App MotionDataItem default speed
     }
     int getCurrentAngle() override { return static_cast<int>(feedback_() * 10); }
     bool failed() const { return failed_; }

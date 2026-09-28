@@ -196,6 +196,7 @@ void StackchanHead::Run() {
     unsigned current_turn = 0;
     TorqueSafety torque_safety;
     int64_t last_log = 0;
+    TickType_t frame_tick = xTaskGetTickCount();
     while (true) {
         if (diagnostics_.exchange(false)) {
             for (uint8_t id : {1, 2}) {
@@ -335,7 +336,10 @@ void StackchanHead::Run() {
             ESP_LOGI(kTag, "%s", StatusJson().c_str());
             last_log = now;
         }
-        vTaskDelay(pdMS_TO_TICKS(20));
+        // Include UART work in the frame, without catch-up bursts after timeouts.
+        if (xTaskGetTickCount() - frame_tick >= pdMS_TO_TICKS(40))
+            frame_tick = xTaskGetTickCount();
+        vTaskDelayUntil(&frame_tick, pdMS_TO_TICKS(20));
     }
 }
 void StackchanHead::Console() {

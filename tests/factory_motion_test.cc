@@ -23,7 +23,10 @@ int main() {
     axis.Reset(actual);
     assert(writes == 0);  // adopting feedback must not command the device
     axis.Target(0);
-    for (now = 20; now <= 6000; now += 20)
+    for (now = 20; now <= 500; now += 20)
+        axis.update();
+    assert(std::abs(actual) < 2.f);  // App speed 500 settles promptly.
+    for (; now <= 6000; now += 20)
         axis.update();
     assert(writes > 20 && last == 461 && std::abs(actual) < 1);
     axis.Target(30);
@@ -60,6 +63,9 @@ int main() {
             });
         gesture_axis.Reset(angle);
         assert(policy.Gesture(shake, now));
+        const uint32_t start = now;
+        int excursions = 0;
+        bool outside = false;
         for (int i = 0; i < 350; ++i) {
             now += 20;
             policy.Feedback(feedback(), true, now);
@@ -67,6 +73,14 @@ int main() {
             assert(target);
             gesture_axis.Target(shake ? target->yaw : target->pitch);
             gesture_axis.update();
+            const bool next_outside = angle - base > 4.f;
+            if (next_outside && !outside)
+                ++excursions;
+            outside = next_outside;
+            if (now - start == 3000) {
+                assert(excursions >= 2);
+                assert(std::abs(angle - base) < 1.f);
+            }
         }
         std::cout << "gesture " << shake << " excursion=" << low - base << ".." << high - base
                   << std::endl;
