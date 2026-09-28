@@ -51,8 +51,18 @@ public:
         return std::isfinite(p.yaw) && std::isfinite(p.pitch) && p.yaw >= -30 && p.yaw <= 30 &&
                p.pitch >= 5 && p.pitch <= 60;
     }
+    static Pose Clamp(Pose p) {
+        return {std::clamp(p.yaw, -30.f, 30.f), std::clamp(p.pitch, 5.f, 60.f)};
+    }
+    static bool FeedbackSafe(Pose p) {
+        // Actual feedback may settle slightly beyond a commanded endpoint.
+        // This tolerance never expands the range of emitted targets.
+        return std::isfinite(p.yaw) && std::isfinite(p.pitch) &&
+               p.yaw >= -30 - kSettleToleranceDegrees && p.yaw <= 30 + kSettleToleranceDegrees &&
+               p.pitch >= 5 - kSettleToleranceDegrees && p.pitch <= 60 + kSettleToleranceDegrees;
+    }
     void Feedback(Pose p, bool valid, int64_t now) {
-        valid_ = valid && Safe(p);
+        valid_ = valid && FeedbackSafe(p);
         if (valid_) {
             current_ = p;
             feedback_at_ = now;
@@ -64,7 +74,7 @@ public:
             return false;
         armed_ = true;
         fault_ = false;
-        base_ = target_ = current_;
+        base_ = target_ = Clamp(current_);
         gesture_ = false;
         automatic_ = automatic;
         CancelBackground(now);
@@ -95,7 +105,7 @@ public:
         automatic_ = false;
         gesture_ = auto_gesture_ = false;
         if (Ready(now))
-            base_ = target_ = current_;
+            base_ = target_ = Clamp(current_);
     }
     bool Resume(int64_t now) {
         if (!Fresh(now))
@@ -124,7 +134,7 @@ public:
     void Idle(bool idle, bool motor_busy, uint32_t random, int64_t now) {
         if (idle != idle_) {
             if (!idle && idle_owned_ && !petting_) {
-                base_ = target_ = current_;  // freeze the glance on entering conversation
+                base_ = target_ = Clamp(current_);  // freeze glance within command limits
                 idle_owned_ = false;
             }
             next_idle_ = now + 4000;
@@ -158,14 +168,14 @@ public:
                 pet_restore_at_ = 0;
                 return;
             }
-            pet_restore_ = current_;
+            pet_restore_ = Clamp(current_);
             petting_ = true;
             pet_returning_ = false;
             pet_started_ = now;
             pet_restore_at_ = 0;
             idle_owned_ = false;
             gesture_ = auto_gesture_ = false;
-            target_ = {current_.yaw, std::clamp(current_.pitch + 18.f, 5.f, 60.f)};
+            target_ = Clamp({current_.yaw, current_.pitch + 18.f});
             pet_center_ = target_;
         } else if (petting_)
             pet_restore_at_ = now + 3000;

@@ -4,6 +4,17 @@
 #include "../main/boards/m5stack/stackchan-k151/motion_policy.h"
 using namespace stackchan;
 int main() {
+    Policy boundary;
+    boundary.Feedback({-9.38f, 4.6875f}, true, 0);
+    assert(boundary.Arm(0));
+    assert(boundary.Step(0)->pitch == 5);
+    boundary.Touch(true, 0);
+    boundary.Touch(false, 1);
+    boundary.Feedback({-9.38f, 22}, true, 3001);
+    assert(boundary.Step(3001)->pitch == 5);
+    assert(!boundary.Move({0, 4.69f}, 3001));  // command limit remains unchanged
+    boundary.Feedback({0, 2}, true, 3020);
+    assert(boundary.fault());
     uint8_t regs[32]{};
     assert(ConfigureHeadTouch(
         [&](uint8_t r, uint8_t v) {

@@ -266,7 +266,7 @@ void StackchanHead::Run() {
         bool read_ok = yaw_ok && pitch_ok;
         const auto now = Now();
         current = {Degrees(yaw.raw, kYawZero), Degrees(pitch.raw, kPitchZero)};
-        bool valid = read_ok && mode_ok && Policy::Safe(current);
+        bool valid = read_ok && mode_ok && Policy::FeedbackSafe(current);
         if (!valid && !policy.fault())
             ESP_LOGW(kTag, "Invalid feedback yaw_ok=%d pitch_ok=%d mode_ok=%d raw=%d/%d", yaw_ok,
                      pitch_ok, mode_ok, yaw.raw, pitch.raw);
