@@ -38,6 +38,25 @@ protected:
 };
 int main() {
     using namespace stackchan;
+    int attempts = 0;
+    assert(ReadFeedbackWithRetry([&] { return ++attempts == 2; }, [] { return false; }));
+    assert(attempts == 2);
+    attempts = 0;
+    assert(!ReadFeedbackWithRetry(
+        [&] {
+            ++attempts;
+            return false;
+        },
+        [] { return false; }));
+    assert(attempts == 2);  // bounded, no stale-feedback fallback
+    attempts = 0;
+    assert(!ReadFeedbackWithRetry(
+        [&] {
+            ++attempts;
+            return false;
+        },
+        [] { return true; }));
+    assert(attempts == 1);  // servo alarm must not be masked by a retry
     uint8_t regs[32]{};
     for (auto& r : regs)
         r = 0xaa;

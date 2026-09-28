@@ -51,7 +51,8 @@ struct Feedback {
 };
 bool FeedbackOf(uint8_t id, Feedback& f) {
     Bytes p;
-    if (!Read(id, 56, 15, p))
+    if (!ReadFeedbackWithRetry([&] { return Read(id, 56, 15, p); },
+                               [] { return factory_bus.getState() != 0; }))
         return false;
     f.raw = Word(p.data());
     f.load = Word(p.data() + 4) & 0x3ff;

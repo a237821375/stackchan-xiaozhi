@@ -3,6 +3,13 @@
 #include <vector>
 namespace stackchan {
 using Bytes = std::vector<uint8_t>;
+// A missed UART reply is retried once; never reuse stale data or mask an alarm.
+template <typename Read, typename Alarm>
+bool ReadFeedbackWithRetry(Read read, Alarm alarm) {
+    if (read())
+        return true;
+    return !alarm() && read();
+}
 inline Bytes Packet(uint8_t id, uint8_t instruction, const Bytes& parameters) {
     Bytes out{0xff, 0xff, id, static_cast<uint8_t>(parameters.size() + 2), instruction};
     out.insert(out.end(), parameters.begin(), parameters.end());
