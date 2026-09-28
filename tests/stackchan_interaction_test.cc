@@ -79,5 +79,22 @@ int main() {
     strokes.Touch(false, 100);
     strokes.Touch(true, 200);
     assert(strokes.Step(200)->pitch == 28);  // repeated strokes must not ratchet upward
+    float low = 100, high = 0;
+    for (int t = 1200; t < 5400; t += 20) {
+        strokes.Feedback({0, 28}, true, t);
+        const float pitch = strokes.Step(t)->pitch;
+        low = std::min(low, pitch);
+        high = std::max(high, pitch);
+    }
+    assert(low <= 25 && high >= 31);  // gentle repeated nods around the raised pose
+    assert(strokes.speed() == 350);
+    strokes.Touch(false, 5400);
+    strokes.Feedback({0, 28}, true, 8380);
+    strokes.Step(8380);
+    assert(strokes.petting());
+    strokes.Feedback({0, 28}, true, 8400);
+    assert(strokes.Step(8400)->pitch == 10 && !strokes.petting());
+    assert(strokes.speed() == 350);  // restore must also be gentle
+    assert(strokes.Move({0, 20}, 8400) && strokes.speed() == 650);
     std::cout << "idle and pet interactions: PASS\n";
 }

@@ -143,6 +143,7 @@ public:
         } else if (action >= 90)
             yaw = 0;
         base_ = target_ = {yaw, pitch};
+        pet_returning_ = false;
         idle_owned_ = true;
         next_idle_ = now + 4000 + (random % 4001);
     }
@@ -159,26 +160,42 @@ public:
             }
             pet_restore_ = current_;
             petting_ = true;
+            pet_returning_ = false;
+            pet_started_ = now;
             pet_restore_at_ = 0;
             idle_owned_ = false;
             gesture_ = auto_gesture_ = false;
             target_ = {current_.yaw, std::clamp(current_.pitch + 18.f, 5.f, 60.f)};
+            pet_center_ = target_;
         } else if (petting_)
             pet_restore_at_ = now + 3000;
     }
     bool petting() const { return petting_; }
     bool idle_motion() const { return idle_owned_; }
-    int speed() const { return idle_owned_ && !petting_ ? 400 : 650; }
+    int speed() const { return petting_ || pet_returning_ ? 350 : (idle_owned_ ? 400 : 650); }
     std::optional<Pose> Step(int64_t now) {
         if (!Ready(now))
             return std::nullopt;
+        if (pet_returning_ && std::abs(current_.yaw - target_.yaw) < kSettleToleranceDegrees &&
+            std::abs(current_.pitch - target_.pitch) < kSettleToleranceDegrees)
+            pet_returning_ = false;
         if (petting_) {
             if (!touched_ && pet_restore_at_ && now >= pet_restore_at_) {
                 petting_ = false;
+                pet_returning_ = true;
                 base_ = target_ = pet_restore_;
                 next_idle_ = now + 4000;
-            } else
+            } else {
+                // Give the first lift time to settle, then use complete spring
+                // waypoints rather than retargeting from feedback every frame.
+                target_ = pet_center_;
+                const auto age = now - pet_started_;
+                if (age >= 1200) {
+                    const float delta = ((age - 1200) / 700) % 2 == 0 ? -3.f : 3.f;
+                    target_.pitch = std::clamp(pet_center_.pitch + delta, 5.f, 60.f);
+                }
                 return target_;
+            }
         }
         if (gesture_) {
             auto age = now - gesture_at_;
@@ -208,8 +225,8 @@ public:
                         base_.pitch + (emotion_ == 2 && auto_gesture_ ? -delta : delta), 5.f, 60.f);
             }
         }
-        if (!gesture_ && speaking_ && emotion_ != 3 && automatic_ && count_ < 2 &&
-            now >= next_micro_ && std::abs(current_.yaw - base_.yaw) < 1.5f &&
+        if (!gesture_ && !pet_returning_ && speaking_ && emotion_ != 3 && automatic_ &&
+            count_ < 2 && now >= next_micro_ && std::abs(current_.yaw - base_.yaw) < 1.5f &&
             std::abs(current_.pitch - base_.pitch) < 1.5f) {
             gesture_ = auto_gesture_ = true;
             shake_ = emotion_ == 1;
@@ -225,7 +242,7 @@ public:
         return target_;
     }
     void Fault() {
-        petting_ = idle_owned_ = false;
+        petting_ = pet_returning_ = idle_owned_ = false;
         fault_ = true;
         armed_ = false;
         gesture_ = auto_gesture_ = false;
@@ -240,7 +257,7 @@ public:
 
 private:
     void CancelBackground(int64_t now) {
-        petting_ = idle_owned_ = false;
+        petting_ = pet_returning_ = idle_owned_ = false;
         next_idle_ = now + 8000;
     }
     bool Fresh(int64_t now) const {
@@ -254,7 +271,9 @@ private:
         return armed_ && !fault_;
     }
     Pose current_, base_, target_;
-    Pose pet_restore_;
+    Pose pet_restore_, pet_center_;
+    bool pet_returning_ = false;
+    int64_t pet_started_ = 0;
     bool petting_ = false, touched_ = false, idle_ = false, idle_owned_ = false;
     int64_t pet_restore_at_ = 0, next_idle_ = 0;
     bool valid_ = false, armed_ = false, fault_ = false, automatic_ = false, speaking_ = false,

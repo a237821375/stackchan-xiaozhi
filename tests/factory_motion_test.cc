@@ -89,5 +89,40 @@ int main() {
             assert(base - low >= 15.f);
         assert(std::abs(angle - base) < 1.f);
     }
+    {
+        float pitch = 10, low = 100, high = 0;
+        stackchan::Policy pet;
+        pet.Feedback({0, pitch}, true, now);
+        assert(pet.Arm(now));
+        pet.Touch(true, now);
+        stackchan::FactoryAxis pet_axis(
+            610, 5, 60, [&] { return pitch; },
+            [&](int raw) {
+                pitch = (raw - 610) / 3.2f;
+                return true;
+            });
+        pet_axis.Reset(pitch);
+        for (int elapsed = 0; elapsed <= 11000; elapsed += 20) {
+            now += 20;
+            pet.Feedback({0, pitch}, true, now);
+            if (elapsed == 6000)
+                pet.Touch(false, now);
+            auto target = pet.Step(now);
+            assert(target);
+            pet_axis.Target(target->pitch, pet.speed());
+            pet_axis.update();
+            if (elapsed >= 2000 && elapsed < 9000) {
+                low = std::min(low, pitch);
+                high = std::max(high, pitch);
+            }
+            if (elapsed == 8980)
+                assert(pet.petting());
+            if (elapsed == 9000)
+                assert(!pet.petting());
+        }
+        assert(low < 26 && high > 30 && std::abs(pitch - 10) < 1);
+        std::cout << "pet spring excursion=" << low << ".." << high << ", restored=" << pitch
+                  << '\n';
+    }
     std::cout << "factory spring trajectory: PASS\n";
 }
