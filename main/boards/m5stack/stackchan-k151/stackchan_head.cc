@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstring>
 #include "application.h"
+#include "buffered_servo_bus.h"
 #include "factory_axis.h"
 #include "factory_upstream/ftservo/SCSCL.h"
 #include "factory_upstream/smooth_ui_toolkit/src/core/hal/hal.hpp"
@@ -28,7 +29,7 @@ constexpr int kYawZero = 461, kPitchZero = 610;
 int64_t Now() { return esp_timer_get_time() / 1000; }
 int Raw(float angle, int zero) { return zero + static_cast<int>(std::lround(angle * 3.2f)); }
 float Degrees(int raw, int zero) { return (raw - zero) / 3.2f; }
-SCSCL factory_bus;
+BufferedServoBus factory_bus;
 bool BusOk(int result, int expected, uint8_t id) {
     const bool ok =
         result == expected && factory_bus.getLastError() == 0 && factory_bus.getState() == 0;

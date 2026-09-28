@@ -5,6 +5,7 @@
 #include "../main/boards/m5stack/stackchan-k151/factory_upstream/ftservo/SCS.h"
 #include "../main/boards/m5stack/stackchan-k151/servo_power.h"
 #include "../main/boards/m5stack/stackchan-k151/servo_protocol.h"
+#include "../main/boards/m5stack/stackchan-k151/servo_tx_frame.h"
 class TestBus : public SCS {
 public:
     TestBus() : SCS(1) {}
@@ -38,6 +39,25 @@ protected:
 };
 int main() {
     using namespace stackchan;
+    ServoTxFrame frame;
+    const uint8_t header[]{255, 255, 1, 4, 2, 56}, payload[]{15}, checksum[]{178};
+    int sends = 0;
+    assert(frame.Append(header, 6) == 6 && frame.Append(payload, 1) == 1 &&
+           frame.Append(checksum, 1) == 1);
+    assert(sends == 0);
+    assert(frame.Flush([&](const uint8_t* p, size_t n) {
+        ++sends;
+        assert(n == 8 && p[0] == 255 && p[7] == 178);
+        return int(n);
+    }));
+    assert(sends == 1);
+    uint8_t excess[65]{};
+    assert(frame.Append(excess, 65) == 0);
+    assert(!frame.Flush([&](const uint8_t*, size_t) {
+        ++sends;
+        return 0;
+    }));
+    assert(sends == 1);
     assert(ServoReportedAlarm(0, 1));
     assert(!ServoReportedAlarm(1, 1));  // stale alarm after a new missing reply is not valid
     bool recovered = false;
