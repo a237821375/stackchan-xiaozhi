@@ -2,7 +2,9 @@
 set -eu
 cd "$(dirname "$0")/.."
 out_dir=$(mktemp -d /tmp/stackchan-tests.XXXXXX)
-trap 'rm -f "$out_dir/motion" "$out_dir/protocol" "$out_dir/speaking" "$out_dir/factory" "$out_dir/interaction"; rmdir "$out_dir"' EXIT
+trap 'rm -f "$out_dir/motion" "$out_dir/protocol" "$out_dir/speaking" "$out_dir/factory" "$out_dir/interaction" "$out_dir/purr"; rmdir "$out_dir"' EXIT
+clang++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/purr_loop_test.cc -o "$out_dir/purr"
+"$out_dir/purr"
 clang++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/stackchan_motion_test.cc -o "$out_dir/motion"
 "$out_dir/motion"
 clang++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/stackchan_interaction_test.cc -o "$out_dir/interaction"
