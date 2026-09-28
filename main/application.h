@@ -19,6 +19,7 @@
 #include "audio_service.h"
 #include "device_state.h"
 #include "device_state_machine.h"
+#include "display/speaking_gate.h"
 #include "notify/notify_player.h"
 
 // Main event bits
@@ -36,6 +37,7 @@
 #define MAIN_EVENT_STOP_LISTENING       (1 << 11)
 #define MAIN_EVENT_STATE_CHANGED        (1 << 12)
 #define MAIN_EVENT_PLAYBACK_DRAINED     (1 << 13)
+#define MAIN_EVENT_AUDIO_OUTPUT         (1 << 14)
 
 
 enum AecMode {
@@ -45,6 +47,7 @@ enum AecMode {
 };
 
 class Application {
+    SpeakingGate speaking_gate_;
 public:
     static Application& GetInstance() {
         static Application instance;

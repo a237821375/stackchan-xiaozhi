@@ -348,6 +348,9 @@ void AudioService::AudioOutputTask() {
             callbacks_.on_playback_progress(task.playback_id, task.media_position_ms);
         }
 
+        if (callbacks_.on_audio_output) {
+            callbacks_.on_audio_output();
+        }
         codec_->OutputData(task.pcm);
 
         /* Update the last output time */

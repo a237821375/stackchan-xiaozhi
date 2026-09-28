@@ -9,6 +9,7 @@ class StackchanHead {
 public:
     void Start();
     void SetSpeaking(bool value) { speaking_.store(value); }
+    void BeginSpeech() { turn_.fetch_add(1); }
     void SetEmotion(const std::string& emotion);
 
 private:
@@ -27,10 +28,11 @@ private:
     Status status_;
     std::optional<Command> command_;
     std::atomic<bool> speaking_{false};
+    std::atomic<unsigned> turn_{0};
     std::atomic<int> emotion_{0};
     void Run();
     void Console();
     void RegisterTools();
     std::string StatusJson();
-    std::string Submit(Action action, stackchan::Pose pose = {});
+    std::string Submit(Action action, stackchan::Pose pose = {}, bool local = false);
 };

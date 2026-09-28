@@ -87,6 +87,9 @@ void Application::Initialize() {
     callbacks.on_playback_drained = [this]() {
         xEventGroupSetBits(event_group_, MAIN_EVENT_PLAYBACK_DRAINED);
     };
+    callbacks.on_audio_output = [this]() {
+        xEventGroupSetBits(event_group_, MAIN_EVENT_AUDIO_OUTPUT);
+    };
     callbacks.on_playback_progress = [this](uint32_t playback_id, uint32_t media_position_ms) {
         notify_player_.OnPlaybackProgress(playback_id, media_position_ms);
     };
@@ -181,7 +184,7 @@ void Application::Run() {
         MAIN_EVENT_VAD_CHANGE | MAIN_EVENT_CLOCK_TICK | MAIN_EVENT_ERROR |
         MAIN_EVENT_NETWORK_CONNECTED | MAIN_EVENT_NETWORK_DISCONNECTED | MAIN_EVENT_TOGGLE_CHAT |
         MAIN_EVENT_START_LISTENING | MAIN_EVENT_STOP_LISTENING | MAIN_EVENT_ACTIVATION_DONE |
-        MAIN_EVENT_STATE_CHANGED | MAIN_EVENT_PLAYBACK_DRAINED;
+        MAIN_EVENT_STATE_CHANGED | MAIN_EVENT_PLAYBACK_DRAINED | MAIN_EVENT_AUDIO_OUTPUT;
 
     while (true) {
         auto bits = xEventGroupWaitBits(event_group_, ALL_EVENTS, pdTRUE, pdFALSE, portMAX_DELAY);
@@ -211,12 +214,14 @@ void Application::Run() {
             HandleStateChangedEvent();
         }
 
+        if (bits & MAIN_EVENT_AUDIO_OUTPUT) {
+            Board::GetInstance().GetDisplay()->SetSpeaking(
+                speaking_gate_.Output(audio_service_.IsPlaybackIdle()));
+        }
         if (bits & MAIN_EVENT_PLAYBACK_DRAINED) {
             if (audio_service_.IsPlaybackIdle()) {
                 notify_player_.OnPlaybackDrained();
-                if (GetDeviceState() != kDeviceStateSpeaking) {
-                    Board::GetInstance().GetDisplay()->SetSpeaking(false);
-                }
+                Board::GetInstance().GetDisplay()->SetSpeaking(speaking_gate_.Drain(true));
             }
             // Deferred listening start (auto mode): the playback queue has
             // drained, so it is now safe to enable voice processing.
@@ -999,11 +1004,10 @@ void Application::HandleStateChangedEvent() {
 
     auto& board = Board::GetInstance();
     auto display = board.GetDisplay();
-    if (new_state == kDeviceStateSpeaking) {
-        display->SetSpeaking(true);
-    } else if (audio_service_.IsPlaybackIdle()) {
-        display->SetSpeaking(false);
-    }
+    const bool speech_state = new_state == kDeviceStateSpeaking || new_state == kDeviceStateNotifying;
+    speaking_gate_.State(speech_state, audio_service_.IsPlaybackIdle());
+    if (speech_state) display->BeginSpeech();
+    display->SetSpeaking(speaking_gate_.active());
     auto led = board.GetLed();
     led->OnStateChanged();
 

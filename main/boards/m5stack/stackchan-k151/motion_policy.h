@@ -4,6 +4,42 @@
 #include <cstdint>
 #include <optional>
 namespace stackchan {
+inline bool RemoteMotionAllowed(bool approved, bool armed) { return approved && armed; }
+class TorqueSafety {
+public:
+    void BeginWrite() { commanded_ = true; }
+    bool ReleaseOnFault(bool fault) {
+        if (fault && commanded_) {
+            commanded_ = false;
+            return true;
+        }
+        return false;
+    }
+
+private:
+    bool commanded_ = false;
+};
+class AxisStall {
+public:
+    bool Update(float current, float target, int64_t now) {
+        if (std::abs(target - current) <= 1) {
+            tracking_ = false;
+            return false;
+        }
+        if (!tracking_ || std::abs(current - last_progress_) >= .3f) {
+            tracking_ = true;
+            last_progress_ = current;
+            progress_at_ = now;
+        }
+        return now - progress_at_ > 1200;
+    }
+    void Reset() { tracking_ = false; }
+
+private:
+    bool tracking_ = false;
+    float last_progress_ = 0;
+    int64_t progress_at_ = 0;
+};
 struct Pose {
     float yaw = 0, pitch = 10;
 };
@@ -21,14 +57,14 @@ public:
         } else
             Fault();
     }
-    bool Arm(int64_t now) {
+    bool Arm(int64_t now, bool automatic = true) {
         if (!Fresh(now))
             return false;
         armed_ = true;
         fault_ = false;
         base_ = target_ = current_;
         gesture_ = false;
-        automatic_ = true;
+        automatic_ = automatic;
         return true;
     }
     bool Move(Pose p, int64_t now) {
@@ -68,12 +104,15 @@ public:
             return;
         speaking_ = value;
         if (value) {
-            count_ = 0;
-            next_micro_ = now + 1800;
+            next_micro_ = std::max(next_micro_, now + 1800);
         } else if (auto_gesture_) {
             gesture_ = auto_gesture_ = false;
             target_ = base_;
         }
+    }
+    void BeginTurn(int64_t now) {
+        count_ = 0;
+        next_micro_ = now + 1800;
     }
     void Emotion(int emotion) { emotion_ = emotion; }
     std::optional<Pose> Step(int64_t now) {

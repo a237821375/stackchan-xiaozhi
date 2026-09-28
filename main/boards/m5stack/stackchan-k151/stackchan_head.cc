@@ -89,10 +89,15 @@ void StackchanHead::Start() {
         return;
     }
     RegisterTools();
-    xTaskCreate([](void* p) { static_cast<StackchanHead*>(p)->Run(); }, "head", 6144, this, 3,
-                nullptr);
-    xTaskCreate([](void* p) { static_cast<StackchanHead*>(p)->Console(); }, "head_console", 4096,
-                this, 1, nullptr);
+    if (xTaskCreate([](void* p) { static_cast<StackchanHead*>(p)->Run(); }, "head", 6144, this, 3,
+                    nullptr) != pdPASS) {
+        ESP_LOGE(kTag, "Head task unavailable; motion stays disabled");
+        return;
+    }
+    if (xTaskCreate([](void* p) { static_cast<StackchanHead*>(p)->Console(); }, "head_console",
+                    4096, this, 1, nullptr) != pdPASS) {
+        ESP_LOGE(kTag, "Local head console unavailable");
+    }
 }
 void StackchanHead::SetEmotion(const std::string& s) {
     emotion_.store(
@@ -117,8 +122,11 @@ std::string StackchanHead::StatusJson() {
              status_.raw_yaw, status_.raw_pitch);
     return b;
 }
-std::string StackchanHead::Submit(Action action, Pose pose) {
+std::string StackchanHead::Submit(Action action, Pose pose, bool local) {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (!local && action != Action::Stop && action != Action::Resume &&
+        !RemoteMotionAllowed(status_.approved, status_.armed))
+        return "rejected: local head movement verification required";
     if (action != Action::Stop && !status_.valid)
         return "rejected: head feedback unavailable or outside safe range";
     if (action == Action::Move && !Policy::Safe(pose))
@@ -156,11 +164,15 @@ void StackchanHead::Run() {
         mode_ok = mode_ok && high > low && low <= required_low && high >= required_high;
     }
     bool first = true, torque = false;
-    Pose previous;
-    int64_t stalled_since = 0, last_log = 0;
+    AxisStall yaw_stall, pitch_stall;
+    unsigned current_turn = 0;
+    TorqueSafety torque_safety;
+    int64_t last_log = 0;
     while (true) {
         Feedback yaw, pitch;
-        bool read_ok = FeedbackOf(1, yaw) && FeedbackOf(2, pitch);
+        const bool yaw_ok = FeedbackOf(1, yaw);
+        const bool pitch_ok = FeedbackOf(2, pitch);
+        bool read_ok = yaw_ok && pitch_ok;
         const auto now = Now();
         Pose current{Degrees(yaw.raw, kYawZero), Degrees(pitch.raw, kPitchZero)};
         bool valid = read_ok && mode_ok && Policy::Safe(current);
@@ -168,6 +180,11 @@ void StackchanHead::Run() {
         if (first && valid && approved)
             policy.Arm(now);
         first = false;
+        const unsigned next_turn = turn_.load();
+        if (next_turn != current_turn) {
+            policy.BeginTurn(now);
+            current_turn = next_turn;
+        }
         std::optional<Command> cmd;
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -177,13 +194,14 @@ void StackchanHead::Run() {
         if (cmd) {
             switch (cmd->action) {
                 case Action::Arm:
-                    policy.Arm(now);
+                    policy.Arm(now, false);
                     break;
                 case Action::Approve:
                     if (valid && policy.armed()) {
                         Settings settings("head_ctl", true);
                         settings.SetInt("verified", 1);
                         approved = true;
+                        policy.Resume(now);
                     }
                     break;
                 case Action::Move:
@@ -202,8 +220,11 @@ void StackchanHead::Run() {
                     break;
                 case Action::Stop:
                     policy.Stop(now);
-                    if (valid && torque && !(Position(1, yaw.raw) && Position(2, pitch.raw)))
-                        policy.Fault();
+                    if (valid && torque) {
+                        torque_safety.BeginWrite();
+                        if (!(Position(1, yaw.raw) && Position(2, pitch.raw)))
+                            policy.Fault();
+                    }
                     break;
                 case Action::Resume:
                     if (approved)
@@ -217,22 +238,20 @@ void StackchanHead::Run() {
         bool moving = target && (std::abs(target->yaw - current.yaw) > 1 ||
                                  std::abs(target->pitch - current.pitch) > 1);
         if (moving && valid) {
-            bool stuck = std::abs(current.yaw - previous.yaw) < .3f &&
-                         std::abs(current.pitch - previous.pitch) < .3f;
-            if (stuck) {
-                if (stalled_since == 0)
-                    stalled_since = now;
-            } else
-                stalled_since = 0;
-            if ((stalled_since && now - stalled_since > 1200) || yaw.load >= 650 ||
-                pitch.load >= 650 || yaw.current >= 350 || pitch.current >= 350) {
+            const bool yaw_stuck = yaw_stall.Update(current.yaw, target->yaw, now);
+            const bool pitch_stuck = pitch_stall.Update(current.pitch, target->pitch, now);
+            if (yaw_stuck || pitch_stuck || yaw.load >= 650 || pitch.load >= 650 ||
+                yaw.current >= 350 || pitch.current >= 350) {
                 policy.Fault();
                 target.reset();
                 ESP_LOGE(kTag, "Head stalled/overloaded; targets stopped");
             }
-        } else
-            stalled_since = 0;
+        } else {
+            yaw_stall.Reset();
+            pitch_stall.Reset();
+        }
         if (target && valid) {
+            torque_safety.BeginWrite();
             bool ok = true;
             if (!torque) {
                 // Set the present position BEFORE enabling torque (avoid an old goal).
@@ -251,7 +270,12 @@ void StackchanHead::Run() {
                 ESP_LOGE(kTag, "Servo command failed; motion disabled");
             }
         }
-        previous = current;
+        if (torque_safety.ReleaseOnFault(policy.fault())) {
+            // Release both independently, including a partially successful enable.
+            Write(1, {40, 0});
+            Write(2, {40, 0});
+            torque = false;
+        }
         {
             std::lock_guard<std::mutex> lock(mutex_);
             status_ = {
@@ -282,17 +306,17 @@ void StackchanHead::Console() {
             if (strcmp(line, "head status") == 0)
                 result = StatusJson();
             else if (strcmp(line, "head arm") == 0)
-                result = Submit(Action::Arm);
+                result = Submit(Action::Arm, {}, true);
             else if (strcmp(line, "head approve") == 0)
-                result = Submit(Action::Approve);
+                result = Submit(Action::Approve, {}, true);
             else if (strcmp(line, "head stop") == 0)
-                result = Submit(Action::Stop);
+                result = Submit(Action::Stop, {}, true);
             else if (strcmp(line, "head probe yaw") == 0)
-                result = Submit(Action::Adjust, {2, 0});
+                result = Submit(Action::Adjust, {2, 0}, true);
             else if (strcmp(line, "head probe pitch") == 0)
-                result = Submit(Action::Adjust, {0, 2});
+                result = Submit(Action::Adjust, {0, 2}, true);
             else if (strcmp(line, "head center") == 0)
-                result = Submit(Action::Move, {0, 10});
+                result = Submit(Action::Move, {0, 10}, true);
             if (!result.empty())
                 ESP_LOGI(kTag, "console: %s", result.c_str());
         } else if (used + 1 < sizeof(line))
@@ -312,7 +336,7 @@ void StackchanHead::RegisterTools() {
               "Control head when user asks 回正/抬头/低头/左看/右看. pose: center, up, down, left, "
               "right. Hold position afterwards. Left/right are robot's own view. Motion is small "
               "and slow.",
-              {Property("pose", kPropertyTypeString)},
+              PropertyList({Property("pose", kPropertyTypeString)}),
               [this](const PropertyList& p) -> ReturnValue {
                   auto s = p["pose"].value<std::string>();
                   if (s == "center")
@@ -331,8 +355,8 @@ void StackchanHead::RegisterTools() {
         "self.robot.adjust_head",
         "Small relative adjustment from the user-selected pose. For 再抬一点 use pitch_delta=2. "
         "Positive pitch looks up. Robot's own left is negative yaw. Limits enforced by device.",
-        {Property("yaw_delta", kPropertyTypeInteger, 0, -10, 10),
-         Property("pitch_delta", kPropertyTypeInteger, 0, -10, 10)},
+        PropertyList({Property("yaw_delta", kPropertyTypeInteger, 0, -10, 10),
+                      Property("pitch_delta", kPropertyTypeInteger, 0, -10, 10)}),
         [this](const PropertyList& p) -> ReturnValue {
             return Submit(Action::Adjust, {float(p["yaw_delta"].value<int>()),
                                            float(p["pitch_delta"].value<int>())});
@@ -340,7 +364,7 @@ void StackchanHead::RegisterTools() {
     m.AddTool("self.robot.head_action",
               "action: nod=点头, shake=摇头, stop=别动/停止 (hold and pause automatic gestures), "
               "resume=恢复动作. nod/shake return to the user-selected pose.",
-              {Property("action", kPropertyTypeString)},
+              PropertyList({Property("action", kPropertyTypeString)}),
               [this](const PropertyList& p) -> ReturnValue {
                   auto s = p["action"].value<std::string>();
                   if (s == "nod")

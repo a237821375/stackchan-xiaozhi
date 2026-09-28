@@ -5,6 +5,32 @@
 using namespace stackchan;
 bool near(float a, float b) { return std::abs(a - b) < .01f; }
 int main() {
+    TorqueSafety safety;
+    assert(!safety.ReleaseOnFault(true));  // read-only startup
+    safety.BeginWrite();
+    assert(safety.ReleaseOnFault(true));   // first partial enable fails
+    assert(!safety.ReleaseOnFault(true));  // do not repeatedly write while faulted
+    safety.BeginWrite();                   // resume, yaw enables, pitch fails in the same iteration
+    assert(safety.ReleaseOnFault(true));   // must release both again
+    Policy probe;
+    probe.Feedback({0, 10}, true, 0);
+    assert(probe.Arm(0, false));
+    probe.Speaking(true, 0);
+    probe.Feedback({0, 10}, true, 2000);
+    assert(near(probe.Step(2000)->pitch, 10));
+    assert(!probe.automatic());
+    assert(!RemoteMotionAllowed(false, true));
+    assert(!RemoteMotionAllowed(true, false));
+    assert(RemoteMotionAllowed(true, true));
+    AxisStall yaw_stall, pitch_stall;
+    for (int t = 0; t <= 1300; t += 50) {
+        bool stopped = yaw_stall.Update(0, 10, t);
+        bool moving_axis_stopped = pitch_stall.Update(10 + t / 200.f, 30, t);
+        assert(!moving_axis_stopped);
+        if (t == 1300)
+            assert(stopped);
+    }
+    assert(!yaw_stall.Update(10, 10, 1400));
     Policy p;
     assert(!p.Move({0, 20}, 0));
     p.Feedback({0, 10}, true, 0);
@@ -28,6 +54,7 @@ int main() {
     assert(q.Arm(0));
     assert(q.Move({0, 20}, 0));
     q.Feedback({0, 20}, true, 1);
+    q.BeginTurn(10);
     q.Speaking(true, 10);
     q.Feedback({0, 20}, true, 2010);
     goal = q.Step(2010);

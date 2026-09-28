@@ -134,7 +134,6 @@ private:
         power_save_timer_->OnExitSleepMode([this]() {
             GetDisplay()->SetPowerSaveMode(false);
             GetBacklight()->RestoreBrightness();
-            head_.Start();
         });
         power_save_timer_->OnShutdownRequest([this]() { pmic_->PowerOff(); });
         power_save_timer_->SetEnabled(true);
