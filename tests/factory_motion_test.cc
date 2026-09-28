@@ -3,6 +3,7 @@
 #include <iostream>
 #include "../main/boards/m5stack/stackchan-k151/factory_axis.h"
 #include "../main/boards/m5stack/stackchan-k151/factory_upstream/smooth_ui_toolkit/src/core/hal/hal.hpp"
+#include "../main/boards/m5stack/stackchan-k151/motion_policy.h"
 
 int main() {
     uint32_t now = 0;
@@ -38,5 +39,41 @@ int main() {
     }
     assert(std::abs(actual - stopped) < 1);
     assert(!axis.failed());
+    // Exercise the policy together with the actual factory spring, not just targets.
+    for (bool shake : {false, true}) {
+        float angle = shake ? 0.f : 20.f;
+        const float base = angle;
+        float low = angle, high = angle;
+        stackchan::Policy policy;
+        auto feedback = [&] {
+            return shake ? stackchan::Pose{angle, 20} : stackchan::Pose{0, angle};
+        };
+        policy.Feedback(feedback(), true, now);
+        assert(policy.Arm(now));
+        stackchan::FactoryAxis gesture_axis(
+            shake ? 461 : 610, shake ? -30 : 5, shake ? 30 : 60, [&] { return angle; },
+            [&](int raw) {
+                angle = (raw - (shake ? 461 : 610)) / 3.2f;
+                low = std::min(low, angle);
+                high = std::max(high, angle);
+                return true;
+            });
+        gesture_axis.Reset(angle);
+        assert(policy.Gesture(shake, now));
+        for (int i = 0; i < 350; ++i) {
+            now += 20;
+            policy.Feedback(feedback(), true, now);
+            auto target = policy.Step(now);
+            assert(target);
+            gesture_axis.Target(shake ? target->yaw : target->pitch);
+            gesture_axis.update();
+        }
+        std::cout << "gesture " << shake << " excursion=" << low - base << ".." << high - base
+                  << std::endl;
+        assert(high - base >= 4.f);
+        if (shake)
+            assert(base - low >= 4.f);
+        assert(std::abs(angle - base) < 1.f);
+    }
     std::cout << "factory spring trajectory: PASS\n";
 }

@@ -50,7 +50,7 @@ int main() {
     p.Feedback({10, 20}, true, 100);
     assert(p.Gesture(false, 200));
     goal = p.Step(200);
-    assert(goal && goal->pitch > 20 && goal->pitch <= 24);
+    assert(goal && goal->pitch > 20 && goal->pitch <= 26);
     assert(p.Move({-10, 25}, 300));
     goal = p.Step(1500);
     assert(!goal && p.fault());
@@ -83,7 +83,7 @@ int main() {
     edge.Feedback({29, 59}, true, 0);
     assert(edge.Arm(0));
     assert(edge.Gesture(false, 0));
-    for (int t = 0; t <= 2000; t += 20) {
+    for (int t = 0; t <= 5000; t += 20) {
         edge.Feedback({29, 59}, true, t);
         if (auto out = edge.Step(t))
             assert(out->pitch <= 60 && out->pitch >= 5 && out->yaw <= 30);

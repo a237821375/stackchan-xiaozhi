@@ -331,7 +331,7 @@ void StackchanHead::Run() {
                 current,        policy.base(),  policy.target(),    yaw.raw,  pitch.raw, valid,
                 policy.armed(), policy.fault(), policy.automatic(), approved, moving};
         }
-        if (now - last_log > 3000) {
+        if (now - last_log > (moving ? 200 : 3000)) {
             ESP_LOGI(kTag, "%s", StatusJson().c_str());
             last_log = now;
         }
@@ -369,6 +369,14 @@ void StackchanHead::Console() {
                 result = Submit(Action::Adjust, {0, 2}, true);
             else if (strcmp(line, "head center") == 0)
                 result = Submit(Action::Move, {0, 10}, true);
+            else if (strcmp(line, "head nod") == 0)
+                result = Submit(Action::Nod, {}, true);
+            else if (strcmp(line, "head shake") == 0)
+                result = Submit(Action::Shake, {}, true);
+            else if (strcmp(line, "head left") == 0)
+                result = Submit(Action::Move, {-10, 10}, true);
+            else if (strcmp(line, "head right") == 0)
+                result = Submit(Action::Move, {10, 10}, true);
             if (!result.empty())
                 ESP_LOGI(kTag, "console: %s", result.c_str());
         } else if (used + 1 < sizeof(line))

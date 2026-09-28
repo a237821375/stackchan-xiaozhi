@@ -122,12 +122,17 @@ public:
             return std::nullopt;
         if (gesture_) {
             auto age = now - gesture_at_;
-            if (age >= 1000) {
+            // Allow the factory speed-150 spring to reach each waypoint before
+            // reversing. Explicit gestures must remain visible through backlash.
+            const int64_t phase_ms = auto_gesture_ ? 1000 : 1400;
+            const float amplitude = auto_gesture_ ? 3.f : 6.f;
+            if (age >= phase_ms * (shake_ ? 3 : 2)) {
                 gesture_ = auto_gesture_ = false;
                 target_ = base_;
             } else {
                 target_ = base_;
-                float delta = age < 400 ? 3.f : (age < 700 && shake_ ? -3.f : 0.f);
+                float delta =
+                    age < phase_ms ? amplitude : (age < phase_ms * 2 && shake_ ? -amplitude : 0.f);
                 if (shake_)
                     target_.yaw = std::clamp(base_.yaw + delta, -30.f, 30.f);
                 else
