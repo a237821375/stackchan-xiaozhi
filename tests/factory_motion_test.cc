@@ -124,5 +124,59 @@ int main() {
         std::cout << "pet spring excursion=" << low << ".." << high << ", restored=" << pitch
                   << '\n';
     }
+    // User repro: touch while a two-axis idle glance is still in flight.
+    // Ensure ownership switches, the old yaw goal is cancelled, and release
+    // restores the measured pose at touch rather than the old idle destination.
+    for (int touch_delay : {20, 60, 120, 240}) {
+        stackchan::Pose measured{0, 10}, commanded = measured, saved;
+        stackchan::Policy policy;
+        policy.Feedback(measured, true, now);
+        assert(policy.Arm(now));
+        policy.Idle(true, false, 0, now);
+        stackchan::FactoryAxis yaw(
+            461, -30, 30, [&] { return measured.yaw; },
+            [&](int raw) {
+                commanded.yaw = (raw - 461) / 3.2f;
+                return true;
+            });
+        stackchan::FactoryAxis pitch(
+            610, 5, 60, [&] { return measured.pitch; },
+            [&](int raw) {
+                commanded.pitch = (raw - 610) / 3.2f;
+                return true;
+            });
+        yaw.Reset(measured.yaw);
+        pitch.Reset(measured.pitch);
+        now += 4000;
+        const uint32_t start = now;
+        for (int elapsed = 0; elapsed <= 5200; elapsed += 20) {
+            now = start + elapsed;
+            // Lagging physical feedback, so internal and actual angles differ.
+            measured.yaw += (commanded.yaw - measured.yaw) * .4f;
+            measured.pitch += (commanded.pitch - measured.pitch) * .4f;
+            policy.Feedback(measured, true, now);
+            policy.Idle(true, elapsed != 0 && (yaw.isMoving() || pitch.isMoving()), 0, now);
+            if (elapsed == touch_delay) {
+                assert(policy.idle_motion() && yaw.isMoving());
+                saved = measured;
+                policy.Touch(true, now);
+                assert(policy.petting() && !policy.idle_motion());
+            }
+            if (elapsed == touch_delay + 1000)
+                policy.Touch(false, now);
+            const auto target = policy.Step(now);
+            assert(target && !policy.fault());
+            if (elapsed >= touch_delay)
+                assert(std::abs(target->yaw - saved.yaw) < .01f);
+            yaw.Target(target->yaw, policy.speed());
+            pitch.Target(target->pitch, policy.speed());
+            yaw.update();
+            pitch.update();
+        }
+        assert(!policy.petting());
+        assert(std::abs(measured.yaw - saved.yaw) < 1);
+        assert(std::abs(measured.pitch - saved.pitch) < 1);
+    }
+    std::cout << "idle-to-touch handoff at four motion phases: PASS\n";
     std::cout << "factory spring trajectory: PASS\n";
 }
