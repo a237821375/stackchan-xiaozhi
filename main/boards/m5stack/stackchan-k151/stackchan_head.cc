@@ -2,15 +2,18 @@
 #include <driver/uart.h>
 #include <esp_log.h>
 #include <esp_mac.h>
+#include <esp_random.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include "application.h"
 #include "factory_axis.h"
 #include "factory_upstream/ftservo/SCSCL.h"
 #include "factory_upstream/smooth_ui_toolkit/src/core/hal/hal.hpp"
+#include "head_touch.h"
 #include "mcp_server.h"
 #include "servo_power.h"
 #include "servo_protocol.h"
@@ -61,7 +64,9 @@ bool FeedbackOf(uint8_t id, Feedback& f) {
 }
 }  // namespace
 
-void StackchanHead::Start(i2c_master_bus_handle_t bus) {
+void StackchanHead::Start(i2c_master_bus_handle_t bus, std::function<void(bool)> pet_display) {
+    i2c_bus_ = bus;
+    pet_display_ = std::move(pet_display);
     uint8_t mac[6]{};
     constexpr uint8_t calibrated_unit[6] = {0x80, 0x45, 0x6b, 0x4d, 0x3a, 0x94};
     if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK || memcmp(mac, calibrated_unit, 6) != 0) {
@@ -100,6 +105,9 @@ void StackchanHead::Start(i2c_master_bus_handle_t bus) {
         return;
     }
     RegisterTools();
+    if (xTaskCreate([](void* p) { static_cast<StackchanHead*>(p)->PollHeadTouch(); }, "head_touch",
+                    4096, this, 2, nullptr) != pdPASS)
+        ESP_LOGE(kTag, "Head touch task unavailable");
     if (xTaskCreate([](void* p) { static_cast<StackchanHead*>(p)->Run(); }, "head", 6144, this, 3,
                     nullptr) != pdPASS) {
         ESP_LOGE(kTag, "Head task unavailable; motion stays disabled");
@@ -108,6 +116,49 @@ void StackchanHead::Start(i2c_master_bus_handle_t bus) {
     if (xTaskCreate([](void* p) { static_cast<StackchanHead*>(p)->Console(); }, "head_console",
                     4096, this, 1, nullptr) != pdPASS) {
         ESP_LOGE(kTag, "Local head console unavailable");
+    }
+}
+void StackchanHead::PollHeadTouch() {
+    i2c_device_config_t cfg{};
+    cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    cfg.device_address = 0x68;
+    cfg.scl_speed_hz = 100000;
+    i2c_master_dev_handle_t dev = nullptr;
+    if (i2c_master_bus_add_device(i2c_bus_, &cfg, &dev) != ESP_OK) {
+        vTaskDelete(nullptr);
+        return;
+    }
+    auto read = [dev](uint8_t reg, uint8_t& value) {
+        return i2c_master_transmit_receive(dev, &reg, 1, &value, 1, 20) == ESP_OK;
+    };
+    auto write = [dev](uint8_t reg, uint8_t value) {
+        const uint8_t bytes[]{reg, value};
+        return i2c_master_transmit(dev, bytes, 2, 20) == ESP_OK;
+    };
+    bool configured = false;
+    for (int attempt = 0; attempt < 3 && !configured; ++attempt) {
+        vTaskDelay(pdMS_TO_TICKS(200));
+        configured = ConfigureHeadTouch(write, read);
+    }
+    if (!configured) {
+        ESP_LOGE(kTag, "Si12T head touch setup failed");
+        i2c_master_bus_rm_device(dev);
+        vTaskDelete(nullptr);
+        return;
+    }
+    ESP_LOGI(kTag, "Si12T head touch ready: 0x68, factory sensitivity 3");
+    TouchFilter filter;
+    unsigned failures = 0;
+    while (true) {
+        uint8_t raw = 0;
+        bool valid = read(0x10, raw);
+        bool contact = filter.Update(raw, valid, Now());
+        bool old = head_touched_.exchange(contact);
+        if (contact != old)
+            ESP_LOGI(kTag, "Head touch %s raw=0x%02x", contact ? "pressed" : "released", raw);
+        if (!valid && failures++ < 3)
+            ESP_LOGW(kTag, "Head touch read failed");
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 void StackchanHead::SetEmotion(const std::string& s) {
@@ -197,6 +248,7 @@ void StackchanHead::Run() {
     unsigned current_turn = 0;
     TorqueSafety torque_safety;
     int64_t last_log = 0;
+    bool shown_pet = false;
     TickType_t frame_tick = xTaskGetTickCount();
     while (true) {
         if (diagnostics_.exchange(false)) {
@@ -222,6 +274,9 @@ void StackchanHead::Run() {
         if (first && valid && approved)
             policy.Arm(now);
         first = false;
+        policy.Idle(Application::GetInstance().GetDeviceState() == kDeviceStateIdle,
+                    yaw_axis.isMoving() || pitch_axis.isMoving(), esp_random(), now);
+        policy.Touch(head_touched_.load(), now);
         const unsigned next_turn = turn_.load();
         if (next_turn != current_turn) {
             policy.BeginTurn(now);
@@ -309,8 +364,8 @@ void StackchanHead::Run() {
                 pitch_axis.Reset(current.pitch);
             }
             if (ok) {
-                yaw_axis.Target(target->yaw);
-                pitch_axis.Target(target->pitch);
+                yaw_axis.Target(target->yaw, policy.speed());
+                pitch_axis.Target(target->pitch, policy.speed());
                 yaw_axis.update();
                 if (!yaw_axis.failed())
                     pitch_axis.update();
@@ -326,6 +381,14 @@ void StackchanHead::Run() {
             Write(1, {40, 0});
             Write(2, {40, 0});
             torque = false;
+        }
+        if (policy.petting() != shown_pet) {
+            shown_pet = policy.petting();
+            ESP_LOGI(kTag, "Pet interaction %s", shown_pet ? "active" : "ended");
+            Application::GetInstance().Schedule([this, active = shown_pet] {
+                if (pet_display_)
+                    pet_display_(active);
+            });
         }
         {
             std::lock_guard<std::mutex> lock(mutex_);

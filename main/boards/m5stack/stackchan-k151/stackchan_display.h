@@ -6,6 +6,10 @@
 // The application already schedules emotion/state changes on its main loop.
 class StackchanDisplay : public SpiLcdDisplay {
 public:
+    void SetPetting(bool active) {
+        petting_ = active;
+        Render();
+    }
     void BeginSpeech() override { head_.BeginSpeech(); }
     StackchanDisplay(StackchanHead& head, esp_lcd_panel_io_handle_t io,
                      esp_lcd_panel_handle_t panel, int w, int h, int x, int y, bool mx, bool my,
@@ -28,10 +32,11 @@ private:
     void Render() {
         if (!IsSetupUICalled())
             return;
-        const auto name = stackchan::FaceAsset(emotion_, speaking_);
+        const auto name = stackchan::FaceAsset(petting_ ? "loving" : emotion_, speaking_);
         LcdDisplay::SetEmotion(name.c_str());
     }
     StackchanHead& head_;
     std::string emotion_ = "neutral";
     bool speaking_ = false;
+    bool petting_ = false;
 };

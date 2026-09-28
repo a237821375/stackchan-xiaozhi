@@ -1,6 +1,7 @@
 #pragma once
 #include <driver/i2c_master.h>
 #include <atomic>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -8,7 +9,7 @@
 
 class StackchanHead {
 public:
-    void Start(i2c_master_bus_handle_t bus);
+    void Start(i2c_master_bus_handle_t bus, std::function<void(bool)> pet_display);
     void SetSpeaking(bool value) { speaking_.store(value); }
     void BeginSpeech() { turn_.fetch_add(1); }
     void SetEmotion(const std::string& emotion);
@@ -32,6 +33,10 @@ private:
     std::atomic<unsigned> turn_{0};
     std::atomic<int> emotion_{0};
     std::atomic<bool> diagnostics_{false};
+    std::atomic<bool> head_touched_{false};
+    i2c_master_bus_handle_t i2c_bus_ = nullptr;
+    std::function<void(bool)> pet_display_;
+    void PollHeadTouch();
     void Run();
     void Console();
     void RegisterTools();

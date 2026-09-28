@@ -18,13 +18,13 @@ public:
         stop_motion_at_angle(target_);
         failed_ = false;
     }
-    void Target(float degrees) {
+    void Target(float degrees, int speed = 650) {
         const int target =
             std::clamp(static_cast<int>(degrees * 10), _angle_limit.x, _angle_limit.y);
         if (target == target_)
             return;
         target_ = target;
-        moveWithSpeed(target_, 650);  // user-selected faster profile; App default is 500
+        moveWithSpeed(target_, std::clamp(speed, 100, 650));
     }
     int getCurrentAngle() override { return static_cast<int>(feedback_() * 10); }
     bool failed() const { return failed_; }

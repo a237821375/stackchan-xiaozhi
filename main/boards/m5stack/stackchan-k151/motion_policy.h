@@ -67,11 +67,13 @@ public:
         base_ = target_ = current_;
         gesture_ = false;
         automatic_ = automatic;
+        CancelBackground(now);
         return true;
     }
     bool Move(Pose p, int64_t now) {
         if (!Ready(now) || !Safe(p))
             return false;
+        CancelBackground(now);
         base_ = target_ = p;
         gesture_ = auto_gesture_ = false;
         count_ = 2;
@@ -80,6 +82,7 @@ public:
     bool Gesture(bool shake, int64_t now) {
         if (!Ready(now))
             return false;
+        CancelBackground(now);
         gesture_ = true;
         auto_gesture_ = false;
         shake_ = shake;
@@ -88,6 +91,7 @@ public:
         return true;
     }
     void Stop(int64_t now) {
+        CancelBackground(now);
         automatic_ = false;
         gesture_ = auto_gesture_ = false;
         if (Ready(now))
@@ -117,9 +121,65 @@ public:
         next_micro_ = now + 1800;
     }
     void Emotion(int emotion) { emotion_ = emotion; }
+    void Idle(bool idle, bool motor_busy, uint32_t random, int64_t now) {
+        if (idle != idle_) {
+            if (!idle && idle_owned_ && !petting_) {
+                base_ = target_ = current_;  // freeze the glance on entering conversation
+                idle_owned_ = false;
+            }
+            next_idle_ = now + 4000;
+            idle_ = idle;
+        }
+        if (!idle || !automatic_ || petting_ || gesture_ || motor_busy || now < next_idle_ ||
+            !Ready(now))
+            return;
+        // Same four choices as the factory IdleMotionModifier, within this unit's limits.
+        float yaw = float((random >> 8) % 41) - 20.f;
+        float pitch = 5.f + float((random >> 16) % 26);
+        const unsigned action = random % 100;
+        if (action >= 50 && action < 80) {
+            yaw = std::clamp(current_.yaw + float((random >> 8) % 21) - 10.f, -25.f, 25.f);
+            pitch = std::clamp(current_.pitch + float((random >> 16) % 13) - 6.f, 5.f, 35.f);
+        } else if (action >= 90)
+            yaw = 0;
+        base_ = target_ = {yaw, pitch};
+        idle_owned_ = true;
+        next_idle_ = now + 4000 + (random % 4001);
+    }
+    void Touch(bool touched, int64_t now) {
+        if (touched == touched_)
+            return;
+        touched_ = touched;
+        if (touched) {
+            if (!automatic_ || !Ready(now))
+                return;
+            if (petting_) {
+                pet_restore_at_ = 0;
+                return;
+            }
+            pet_restore_ = current_;
+            petting_ = true;
+            pet_restore_at_ = 0;
+            idle_owned_ = false;
+            gesture_ = auto_gesture_ = false;
+            target_ = {current_.yaw, std::clamp(current_.pitch + 18.f, 5.f, 60.f)};
+        } else if (petting_)
+            pet_restore_at_ = now + 3000;
+    }
+    bool petting() const { return petting_; }
+    bool idle_motion() const { return idle_owned_; }
+    int speed() const { return idle_owned_ && !petting_ ? 400 : 650; }
     std::optional<Pose> Step(int64_t now) {
         if (!Ready(now))
             return std::nullopt;
+        if (petting_) {
+            if (!touched_ && pet_restore_at_ && now >= pet_restore_at_) {
+                petting_ = false;
+                base_ = target_ = pet_restore_;
+                next_idle_ = now + 4000;
+            } else
+                return target_;
+        }
         if (gesture_) {
             auto age = now - gesture_at_;
             // Two explicit cycles, with a softer second cycle; micro-motion stays small.
@@ -165,6 +225,7 @@ public:
         return target_;
     }
     void Fault() {
+        petting_ = idle_owned_ = false;
         fault_ = true;
         armed_ = false;
         gesture_ = auto_gesture_ = false;
@@ -178,6 +239,10 @@ public:
     Pose current() const { return current_; }
 
 private:
+    void CancelBackground(int64_t now) {
+        petting_ = idle_owned_ = false;
+        next_idle_ = now + 8000;
+    }
     bool Fresh(int64_t now) const {
         return valid_ && now >= feedback_at_ && now - feedback_at_ <= 500;
     }
@@ -189,6 +254,9 @@ private:
         return armed_ && !fault_;
     }
     Pose current_, base_, target_;
+    Pose pet_restore_;
+    bool petting_ = false, touched_ = false, idle_ = false, idle_owned_ = false;
+    int64_t pet_restore_at_ = 0, next_idle_ = 0;
     bool valid_ = false, armed_ = false, fault_ = false, automatic_ = false, speaking_ = false,
          gesture_ = false, shake_ = false, auto_gesture_ = false;
     int emotion_ = 0;
