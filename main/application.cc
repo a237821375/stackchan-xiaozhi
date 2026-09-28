@@ -214,6 +214,9 @@ void Application::Run() {
         if (bits & MAIN_EVENT_PLAYBACK_DRAINED) {
             if (audio_service_.IsPlaybackIdle()) {
                 notify_player_.OnPlaybackDrained();
+                if (GetDeviceState() != kDeviceStateSpeaking) {
+                    Board::GetInstance().GetDisplay()->SetSpeaking(false);
+                }
             }
             // Deferred listening start (auto mode): the playback queue has
             // drained, so it is now safe to enable voice processing.
@@ -996,6 +999,11 @@ void Application::HandleStateChangedEvent() {
 
     auto& board = Board::GetInstance();
     auto display = board.GetDisplay();
+    if (new_state == kDeviceStateSpeaking) {
+        display->SetSpeaking(true);
+    } else if (audio_service_.IsPlaybackIdle()) {
+        display->SetSpeaking(false);
+    }
     auto led = board.GetLed();
     led->OnStateChanged();
 
