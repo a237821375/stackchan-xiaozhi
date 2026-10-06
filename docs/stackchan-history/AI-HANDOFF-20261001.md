@@ -82,7 +82,7 @@ VS Code 曾安装 C/C++ 和 PlatformIO IDE。PlatformIO 曾验证 CoreS3 板卡�
 4. 明确点头/摇头改为多段两次动作，并按用户要求提高速度和幅度，参考原厂 App 的动画与速度模型。
 5. 待机每 4～8 秒随机张望，进入对话停止；明确指令延后自动动作。
 6. 摸头 loving 表情、柔和抬头、轻点头；松手约 3 秒恢复触碰前姿态。
-7. 摸头播放低音量本地猫呼噜声。素材源为 `https://opengameart.org/sites/default/files/cat_purrsleepy_loop.wav`，许可记录在板卡目录 `PURR_LICENSE.md`，接手复用前读取。
+7. 曾尝试摸头播放低音量本地猫呼噜声。**后续更正（2026-10-06）：用户确认实机未实现，不应视为已完成功能。**素材源为 `https://opengameart.org/sites/default/files/cat_purrsleepy_loop.wav`，许可记录在板卡目录 `PURR_LICENSE.md`，接手复用前读取。
 
 资源目录：`/Users/longteng/Developer/stackchan/assets/`，有 `factory-style-talking-20260929`、`cat-purr`、`head-control-20260929` 等。预览为 `factory-style-talking-20260929/preview.html`。
 

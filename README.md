@@ -1,6 +1,6 @@
 # StackChan：会回应摸摸头的小机器人
 
-为 **M5Stack StackChan K151 / CoreS3** 开发的机器人固件：黑底萌脸、讲话动嘴、语音控制头部、待机张望、摸头呼噜，以及跳舞时的 RGB 灯效。
+为 **M5Stack StackChan K151 / CoreS3** 开发的机器人固件：黑底萌脸、讲话动嘴、语音控制头部、待机张望、摸头回应，以及跳舞时的 RGB 灯效。
 
 我们希望它聊天时有一点小动作，闲下来会看看周围，被摸头时会抬起脸回应，听到“跳舞”时能摇头晃脑。这些表情与运动交互，是本仓库重点开发的内容。
 
@@ -17,11 +17,10 @@
 
 动嘴跟随实际语音播放状态，不是逐字或音素级对口型。这些 GIF 是重新绘制的原厂风格素材。
 
-### 摸摸头，会抬头、轻点头和呼噜
+### 摸摸头，会抬头和轻点头
 
 轻触头顶后显示喜欢的表情，柔和抬头，再轻轻上下点头。持续抚摸会延续回应，**松手约 3 秒后恢复触碰前的姿态**；新的头部指令可以取消恢复。
 
-同时播放本地猫咪呼噜录音。呼噜音量较轻，有淡入、淡出；讲话和聆听等音频任务优先。
 
 ### 待机时自己四处看看
 
@@ -62,6 +61,7 @@
 
 - 2026-10-01：完整断电后，一分钟静止采样、一次跳舞和自动待机复测没有出现通信错误或锁定故障。
 - 2026-10-06：Mac M4 ARM64 上主机测试、81 项 Python 构建脚本测试和 ESP-IDF 6.0.1 板卡编译通过。
+- 猫咪呼噜声尚未在实机实现（2026-10-06 用户确认）；仓库保留了音频素材和相关代码尝试，不能将其列为已完成的功能。
 - 舵机偶发串口错码的根因仍未确定；上述短期测试不能证明长期完全稳定。详细过程见[板卡说明与诊断记录](main/boards/m5stack/stackchan-k151/README.md)。
 
 ## 从哪里开始
@@ -76,6 +76,6 @@
 
 语音对话基础来自 [XiaoZhi ESP32](https://github.com/78/xiaozhi-esp32) v2.5.0，头部驱动与弹簧动画参考 [M5Stack StackChan](https://github.com/m5stack/StackChan)。本项目是个人开发项目。
 
-保留上游 [MIT 许可证](LICENSE)及[原厂依赖的来源与许可](main/boards/m5stack/stackchan-k151/factory_upstream/README.md)。猫咪呼噜录音由 Kerzoven 发布，使用 CC0 1.0，详见[素材来源](main/boards/m5stack/stackchan-k151/PURR_LICENSE.md)。
+保留上游 [MIT 许可证](LICENSE)及[原厂依赖的来源与许可](main/boards/m5stack/stackchan-k151/factory_upstream/README.md)。尚未实现的呼噜功能所用录音由 Kerzoven 发布，使用 CC0 1.0，素材和许可记录仍保留，详见[素材来源](main/boards/m5stack/stackchan-k151/PURR_LICENSE.md)。
 
 请勿提交整机备份、NVS、联网原始日志、密码或 Token。历史设计与交接文件保留在 `docs/` 中，仅用于追溯，当前行为以本首页和板卡说明为准。
