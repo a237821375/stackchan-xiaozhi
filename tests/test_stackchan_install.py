@@ -174,6 +174,25 @@ class InstallTests(unittest.TestCase):
         self.assertIn('attach',events)
         self.assertLess(events.index('attach'),events.index(('parameters',0x1000000)))
         self.assertLess(events.index(('parameters',0x1000000)),events.index('read'))
+    def test_verified_flash_reads_are_bounded_and_reassemble_exact_snapshot(self):
+        calls=[]
+        expected=b'a'*0x10000+b'b'*0x10000+b'last partial region'
+        def read(esp,offset,size,**kwargs):
+            self.assertLessEqual(size,0x10000)
+            self.assertEqual(kwargs['flash_size'],'16MB')
+            calls.append((offset,size))
+            return expected[offset-0x9000:offset-0x9000+size]
+        device=installer.Device.__new__(installer.Device)
+        device.api=SimpleNamespace(read_flash=read); device.esp=object()
+        self.assertEqual(device.read(0x9000,len(expected)),expected)
+        self.assertEqual(sum(size for _,size in calls),len(expected))
+        self.assertEqual(calls[0][0],0x9000)
+        self.assertEqual(calls[-1][0]+calls[-1][1],0x9000+len(expected))
+        for offset,size in ((-1,4),(0,0),(0xffffff,2)):
+            with self.assertRaises(ValueError):device.read(offset,size)
+        device.api.read_flash=lambda *args,**kwargs:b'partial'
+        with self.assertRaises(ValueError):device.read(0,0x20000)
+
     def test_short_backup_refused(self):
         with self.assertRaises(ValueError): installer.backup_metadata(self.data[:0x10000],'unit-a')
 
