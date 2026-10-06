@@ -45,6 +45,23 @@ private:
 struct Pose {
     float yaw = 0, pitch = 10;
 };
+enum class HeadFault { None, Communication, UnsafeFeedback, ServoAlarm, Stall, Overload };
+inline const char* FaultName(HeadFault reason) {
+    switch (reason) {
+        case HeadFault::Communication:
+            return "communication_timeout";
+        case HeadFault::UnsafeFeedback:
+            return "unsafe_feedback_or_configuration";
+        case HeadFault::ServoAlarm:
+            return "servo_alarm";
+        case HeadFault::Stall:
+            return "mechanical_stall";
+        case HeadFault::Overload:
+            return "overload";
+        default:
+            return "none";
+    }
+}
 class Policy {
 public:
     static bool Safe(Pose p) {
@@ -67,13 +84,14 @@ public:
             current_ = p;
             feedback_at_ = now;
         } else
-            Fault();
+            Fault(HeadFault::UnsafeFeedback);
     }
     bool Arm(int64_t now, bool automatic = true) {
         if (!Fresh(now))
             return false;
         armed_ = true;
         fault_ = false;
+        fault_reason_ = HeadFault::None;
         base_ = target_ = Clamp(current_);
         gesture_ = false;
         automatic_ = automatic;
@@ -100,6 +118,27 @@ public:
         count_ = 2;
         return true;
     }
+    bool Dance(int64_t now, uint32_t seed) {
+        if (!Ready(now) || touched_)
+            return false;
+        const Pose restore = dancing_ ? dance_restore_ : Clamp(current_);
+        CancelBackground(now);
+        gesture_ = auto_gesture_ = false;
+        dance_restore_ = restore;
+        dance_seed_ = seed;
+        dance_started_ = now;
+        dancing_ = true;
+        count_ = 2;
+        return true;
+    }
+    void EndDance(int64_t now) {
+        if (!dancing_)
+            return;
+        dancing_ = false;
+        base_ = target_ = dance_restore_;
+        next_idle_ = now + 8000;
+    }
+    bool dancing() const { return dancing_; }
     void Stop(int64_t now) {
         CancelBackground(now);
         automatic_ = false;
@@ -140,8 +179,8 @@ public:
             next_idle_ = now + 4000;
             idle_ = idle;
         }
-        if (!idle || !automatic_ || petting_ || gesture_ || motor_busy || now < next_idle_ ||
-            !Ready(now))
+        if (!idle || !automatic_ || petting_ || gesture_ || dancing_ || motor_busy ||
+            now < next_idle_ || !Ready(now))
             return;
         // Same four choices as the factory IdleMotionModifier, within this unit's limits.
         float yaw = float((random >> 8) % 41) - 20.f;
@@ -162,13 +201,15 @@ public:
             return;
         touched_ = touched;
         if (touched) {
+            const Pose restore = dancing_ ? dance_restore_ : Clamp(current_);
+            EndDance(now);
             if (!automatic_ || !Ready(now))
                 return;
             if (petting_) {
                 pet_restore_at_ = 0;
                 return;
             }
-            pet_restore_ = Clamp(current_);
+            pet_restore_ = restore;
             petting_ = true;
             pet_returning_ = false;
             pet_started_ = now;
@@ -186,6 +227,23 @@ public:
     std::optional<Pose> Step(int64_t now) {
         if (!Ready(now))
             return std::nullopt;
+        if (dancing_) {
+            const auto age = now - dance_started_;
+            if (age >= 15000) {
+                EndDance(now);
+                return target_;
+            }
+            const uint32_t phase = static_cast<uint32_t>(age / 450);
+            uint32_t value = dance_seed_ + phase * 0x9e3779b9u;
+            value ^= value >> 16;
+            value *= 0x85ebca6bu;
+            value ^= value >> 13;
+            const float yaw = 20.f + value % 11;
+            const float pitch =
+                (phase / 2) % 2 ? 40.f + (value >> 8) % 21 : 5.f + (value >> 8) % 16;
+            target_ = {phase % 2 ? -yaw : yaw, pitch};
+            return target_;
+        }
         if (pet_returning_ && std::abs(current_.yaw - target_.yaw) < kSettleToleranceDegrees &&
             std::abs(current_.pitch - target_.pitch) < kSettleToleranceDegrees)
             pet_returning_ = false;
@@ -251,14 +309,18 @@ public:
         }
         return target_;
     }
-    void Fault() {
-        petting_ = pet_returning_ = idle_owned_ = false;
+    void Fault(HeadFault reason = HeadFault::UnsafeFeedback) {
+        if (!fault_ ||
+            (fault_reason_ == HeadFault::Communication && reason != HeadFault::Communication))
+            fault_reason_ = reason;
+        petting_ = pet_returning_ = idle_owned_ = dancing_ = false;
         fault_ = true;
         armed_ = false;
         gesture_ = auto_gesture_ = false;
         automatic_ = false;
     }
     bool fault() const { return fault_; }
+    HeadFault fault_reason() const { return fault_reason_; }
     bool armed() const { return armed_; }
     bool automatic() const { return automatic_; }
     Pose base() const { return base_; }
@@ -267,6 +329,7 @@ public:
 
 private:
     void CancelBackground(int64_t now) {
+        EndDance(now);
         petting_ = pet_returning_ = idle_owned_ = false;
         next_idle_ = now + 8000;
     }
@@ -275,13 +338,18 @@ private:
     }
     bool Ready(int64_t now) {
         if (!Fresh(now)) {
-            Fault();
+            Fault(HeadFault::Communication);
             return false;
         }
         return armed_ && !fault_;
     }
     Pose current_, base_, target_;
+    HeadFault fault_reason_ = HeadFault::None;
     Pose pet_restore_, pet_center_;
+    Pose dance_restore_;
+    bool dancing_ = false;
+    uint32_t dance_seed_ = 0;
+    int64_t dance_started_ = 0;
     bool pet_returning_ = false;
     int64_t pet_started_ = 0;
     bool petting_ = false, touched_ = false, idle_ = false, idle_owned_ = false;

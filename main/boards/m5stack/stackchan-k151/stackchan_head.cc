@@ -11,9 +11,11 @@
 #include <cstring>
 #include "application.h"
 #include "buffered_servo_bus.h"
+#include "dance_rgb.h"
 #include "factory_axis.h"
 #include "factory_upstream/ftservo/SCSCL.h"
 #include "factory_upstream/smooth_ui_toolkit/src/core/hal/hal.hpp"
+#include "feedback_recovery.h"
 #include "head_touch.h"
 #include "mcp_server.h"
 #include "servo_power.h"
@@ -30,9 +32,12 @@ int64_t Now() { return esp_timer_get_time() / 1000; }
 int Raw(float angle, int zero) { return zero + static_cast<int>(std::lround(angle * 3.2f)); }
 float Degrees(int raw, int zero) { return (raw - zero) / 3.2f; }
 BufferedServoBus factory_bus;
-bool BusOk(int result, int expected, uint8_t id) {
+bool bus_alarm = false;  // Sole UART worker owns this per-cycle latch.
+bool BusOk(int result, int expected, uint8_t id, bool read = false) {
+    bus_alarm |= ServoReportedAlarm(factory_bus.getLastError(), factory_bus.getState());
     const bool ok =
         result == expected && factory_bus.getLastError() == 0 && factory_bus.getState() == 0;
+    factory_bus.RecordOutcome(id, read, ok);
     static unsigned logged = 0;
     if (!ok && logged++ < 8) {
         ESP_LOGW(kTag, "Factory bus id=%u result=%d expected=%d transport_error=%u servo_status=%u",
@@ -43,7 +48,7 @@ bool BusOk(int result, int expected, uint8_t id) {
 }
 bool Read(uint8_t id, uint8_t reg, uint8_t size, Bytes& data) {
     data.resize(size);
-    return BusOk(factory_bus.Read(id, reg, data.data(), size), size, id);
+    return BusOk(factory_bus.Read(id, reg, data.data(), size), size, id, true);
 }
 void RecoverBus() {
     // Wait beyond the factory 10 ms receive timeout so a delayed response cannot
@@ -79,7 +84,7 @@ bool FeedbackOf(uint8_t id, Feedback& f) {
     f.raw = Word(p.data());
     f.load = Word(p.data() + 4) & 0x3ff;
     f.current = Word(p.data() + 13) & 0x7fff;
-    return f.raw >= 0 && f.raw <= 1000;
+    return true;  // Valid packets with unsafe positions are safety faults, not dropped frames.
 }
 }  // namespace
 
@@ -117,8 +122,11 @@ void StackchanHead::Start(i2c_master_bus_handle_t bus, std::function<void(bool)>
         return;
     }
     ESP_LOGI(kTag, "PY32 VM_EN enabled and read-back verified");
+    if (xTaskCreate([](void* p) { static_cast<StackchanHead*>(p)->RunDanceRgb(); }, "dance_rgb",
+                    3072, this, 1, nullptr) != pdPASS)
+        ESP_LOGE(kTag, "Dance RGB task unavailable");
     vTaskDelay(pdMS_TO_TICKS(200));
-    // Use the exact official SCSerial UART initialization and packet driver.
+    // Use factory UART parameters and packet driver, with an RX diagnostic event queue.
     if (!factory_bus.begin(kUart, 1000000, 6, 7)) {
         ESP_LOGE(kTag, "Factory UART unavailable; head disabled");
         return;
@@ -135,6 +143,68 @@ void StackchanHead::Start(i2c_master_bus_handle_t bus, std::function<void(bool)>
     if (xTaskCreate([](void* p) { static_cast<StackchanHead*>(p)->Console(); }, "head_console",
                     4096, this, 1, nullptr) != pdPASS) {
         ESP_LOGE(kTag, "Local head console unavailable");
+    }
+}
+void StackchanHead::RunDanceRgb() {
+    i2c_device_config_t cfg{};
+    cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    cfg.device_address = 0x6f;
+    cfg.scl_speed_hz = 100000;
+    i2c_master_dev_handle_t device = nullptr;
+    if (i2c_master_bus_add_device(i2c_bus_, &cfg, &device) != ESP_OK) {
+        ESP_LOGE(kTag, "Dance RGB device unavailable");
+        vTaskDelete(nullptr);
+        return;
+    }
+    auto read = [device](uint8_t reg, uint8_t* data, size_t size) {
+        return i2c_master_transmit_receive(device, &reg, 1, data, size, 20) == ESP_OK;
+    };
+    auto write = [device](uint8_t reg, const uint8_t* data, size_t size) {
+        uint8_t bytes[25];
+        if (size > 24)
+            return false;
+        bytes[0] = reg;
+        std::copy_n(data, size, bytes + 1);
+        return i2c_master_transmit(device, bytes, size + 1, 20) == ESP_OK;
+    };
+    DanceRgb lights;
+    bool captured = false;
+    bool initialized = false;
+    uint32_t tick = 0;
+    while (true) {
+        if (!initialized) {
+            if (!captured)
+                captured = lights.Begin(read, write);
+            if (captured && lights.Off(write)) {
+                initialized = true;
+                captured = false;
+                rgb_ready_.store(true);
+                ESP_LOGI(kTag, "RGB initialized: all twelve lights off");
+            }
+        } else if (dancing_.load() && !rgb_fault_.load()) {
+            if (!captured) {
+                captured = lights.Begin(read, write);
+                tick = 0;
+            }
+            if (!captured || !lights.Frame(tick++, write)) {
+                rgb_ready_.store(false);
+                rgb_fault_.store(true);
+                ESP_LOGW(kTag, "RGB communication failed; cancelling dance");
+            }
+        } else if (captured) {
+            // Retry blackout on later ticks if the I2C bus is temporarily unavailable.
+            if (lights.Off(write)) {
+                captured = false;
+                ESP_LOGI(kTag, "Dance ended: all twelve RGB lights off");
+            }
+        } else {
+            uint8_t config = 0;
+            const bool ready = read(0x24, &config, 1);
+            rgb_ready_.store(ready);
+            if (ready)
+                rgb_fault_.store(false);
+        }
+        vTaskDelay(pdMS_TO_TICKS(200));
     }
 }
 void StackchanHead::PollHeadTouch() {
@@ -192,25 +262,49 @@ std::string StackchanHead::StatusJson() {
     snprintf(b, sizeof(b),
              "{\"feedback_valid\":%s,\"armed\":%s,\"approved\":%s,\"fault\":%s,\"automatic\":%s,"
              "\"state\":\"%s\",\"yaw\":%.2f,\"pitch\":%.2f,\"target_yaw\":%.2f,\"target_pitch\":%."
-             "2f,\"raw_yaw\":%d,\"raw_pitch\":%d}",
+             "2f,\"raw_yaw\":%d,\"raw_pitch\":%d,\"fault_reason\":\"%s\","
+             "\"dancing\":%s,\"rgb_ready\":%s}",
              status_.valid ? "true" : "false", status_.armed ? "true" : "false",
              status_.approved ? "true" : "false", status_.fault ? "true" : "false",
              status_.automatic ? "true" : "false",
-             status_.fault
-                 ? "fault"
-                 : (!status_.armed ? "disabled" : (status_.moving ? "moving" : "completed")),
+             status_.fault ? "fault"
+                           : (status_.recovering
+                                  ? "recovering_communication"
+                                  : (!status_.armed ? "disabled"
+                                                    : (status_.moving ? "moving" : "completed"))),
              status_.pose.yaw, status_.pose.pitch, status_.target.yaw, status_.target.pitch,
-             status_.raw_yaw, status_.raw_pitch);
+             status_.raw_yaw, status_.raw_pitch, FaultName(status_.fault_reason),
+             dancing_.load() ? "true" : "false", rgb_ready_.load() ? "true" : "false");
     return b;
 }
 std::string StackchanHead::Submit(Action action, Pose pose, bool local) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!local && action != Action::Stop && action != Action::Resume &&
+    const bool stopping = action == Action::Stop || action == Action::EndDance;
+    if (!stopping && status_.recovering) {
+        if (status_.fault)
+            return std::string("rejected: head motion is locked after a fault; fault_reason=") +
+                   FaultName(status_.fault_reason) +
+                   ". Waiting alone will not unlock motion. Servo feedback is still unstable; "
+                   "check base power and connection. Do not describe this as a mechanical jam, "
+                   "promise automatic recovery, or repeatedly call resume. After valid feedback "
+                   "and checking for obstruction, use head_action resume once and verify status.";
+        return "temporarily unavailable: recovering servo communication (not a latched fault). "
+               "Read get_head_position before retrying; do not repeatedly call resume or describe "
+               "this as a mechanical jam.";
+    }
+    if (!stopping && action != Action::Resume && action != Action::Arm && status_.fault)
+        return std::string("rejected: head stopped; fault_reason=") +
+               FaultName(status_.fault_reason) +
+               ". Motion remains locked; waiting alone will not restart it. Communication timeout "
+               "is not evidence of a mechanical jam, and overload alone is not proof of a jam. "
+               "Check base power, connection and obstruction, then call head_action resume once "
+               "when feedback is valid and verify get_head_position.";
+    if (!local && !stopping && action != Action::Resume &&
         !RemoteMotionAllowed(status_.approved, status_.armed))
         return !status_.approved ? "rejected: local head movement verification required"
                                  : "rejected: motion stopped after a fault; check head position "
                                    "and obstruction, then use resume";
-    if (action != Action::Stop && !status_.valid)
+    if (!stopping && !status_.valid)
         return "rejected: head feedback unavailable or outside safe range";
     if (action == Action::Move && !Policy::Safe(pose))
         return "rejected: yaw must be -30..30, pitch 5..60 degrees";
@@ -219,7 +313,11 @@ std::string StackchanHead::Submit(Action action, Pose pose, bool local) {
         return "rejected: adjusted target outside safe range";
     if (action == Action::Resume && !status_.approved)
         return "rejected: local motion verification required";
-    if (action != Action::Arm && action != Action::Approve && action != Action::Stop &&
+    if (action == Action::Dance && (!rgb_ready_.load() || rgb_fault_.load()))
+        return "rejected: RGB communication unavailable; dance not started";
+    if (action == Action::Dance && head_touched_.load())
+        return "rejected: head is being touched; release it before dancing";
+    if (action != Action::Arm && action != Action::Approve && !stopping &&
         action != Action::Resume && !status_.armed)
         return "rejected: local head calibration check has not been armed";
     ESP_LOGI(kTag, "Command source=%s action=%d yaw=%.2f pitch=%.2f", local ? "USB" : "AI",
@@ -266,10 +364,13 @@ void StackchanHead::Run() {
         kPitchZero, 5, 60, [&] { return current.pitch; }, [](int raw) { return Position(2, raw); });
     unsigned current_turn = 0;
     TorqueSafety torque_safety;
-    int64_t last_log = 0;
+    int64_t last_log = 0, last_diagnostic_log = 0;
     bool shown_pet = false;
+    FeedbackRecovery recovery;
+    bool stop_during_gap = false, inhibit_torque = false;
     TickType_t frame_tick = xTaskGetTickCount();
     while (true) {
+        bus_alarm = false;
         if (diagnostics_.exchange(false)) {
             for (uint8_t id : {1, 2}) {
                 Bytes registers;
@@ -282,125 +383,209 @@ void StackchanHead::Run() {
         Feedback yaw, pitch;
         const bool yaw_ok = FeedbackOf(1, yaw);
         const bool pitch_ok = FeedbackOf(2, pitch);
-        bool read_ok = yaw_ok && pitch_ok;
-        const auto now = Now();
-        current = {Degrees(yaw.raw, kYawZero), Degrees(pitch.raw, kPitchZero)};
-        bool valid = read_ok && mode_ok && Policy::FeedbackSafe(current);
-        if (!valid && !policy.fault())
-            ESP_LOGW(kTag, "Invalid feedback yaw_ok=%d pitch_ok=%d mode_ok=%d raw=%d/%d", yaw_ok,
-                     pitch_ok, mode_ok, yaw.raw, pitch.raw);
-        policy.Feedback(current, valid, now);
-        if (first && valid && approved)
-            policy.Arm(now);
-        first = false;
-        policy.Idle(Application::GetInstance().GetDeviceState() == kDeviceStateIdle,
-                    yaw_axis.isMoving() || pitch_axis.isMoving(), esp_random(), now);
-        policy.Touch(head_touched_.load(), now);
-        const unsigned next_turn = turn_.load();
-        if (next_turn != current_turn) {
-            policy.BeginTurn(now);
-            current_turn = next_turn;
+        const bool read_ok = yaw_ok && pitch_ok;
+        const auto wall_now = Now();
+        const Pose sample{Degrees(yaw.raw, kYawZero), Degrees(pitch.raw, kPitchZero)};
+        // Check each valid axis independently, even when its peer has lost communication.
+        const bool unsafe = !mode_ok || (yaw_ok && !Policy::FeedbackSafe({sample.yaw, 10})) ||
+                            (pitch_ok && !Policy::FeedbackSafe({0, sample.pitch}));
+        const bool overload = (yaw_ok && (yaw.load >= 650 || yaw.current >= 350)) ||
+                              (pitch_ok && (pitch.load >= 650 || pitch.current >= 350));
+        if (overload && !policy.fault()) {
+            ESP_LOGE(kTag,
+                     "Overload sample: yaw load=%d current=%d raw=%d; pitch load=%d current=%d "
+                     "raw=%d; dance=%d",
+                     yaw.load, yaw.current, yaw.raw, pitch.load, pitch.current, pitch.raw,
+                     policy.dancing());
         }
+        if (bus_alarm || unsafe || overload) {
+            policy.Fault(bus_alarm ? HeadFault::ServoAlarm
+                                   : (unsafe ? HeadFault::UnsafeFeedback : HeadFault::Overload));
+            first = false;
+        }
+        const bool was_paused = recovery.paused();
+        const bool ready = recovery.Update(read_ok, wall_now);
+        if (!was_paused && recovery.paused())
+            ESP_LOGW(kTag, "Communication gap: motion suspended; waiting for 3 valid frames");
+        if (recovery.timed_out()) {
+            if (!policy.fault())
+                ESP_LOGE(kTag, "Communication unavailable for 500 ms; motion disabled");
+            policy.Fault(HeadFault::Communication);
+            first = false;
+        }
+        // Never convert missing feedback (-1) into a physical angle or spring origin.
+        const bool valid = read_ok && !unsafe && !bus_alarm && !overload;
+        if (valid)
+            current = sample;
+        const auto now = recovery.PolicyTime(wall_now);
+        if (recovery.paused() || rgb_fault_.load())
+            policy.EndDance(now);
+        bool moving = false;
         std::optional<Command> cmd;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             cmd = command_;
             command_.reset();
         }
-        if (cmd) {
-            yaw_axis.Reset(current.yaw);
-            pitch_axis.Reset(current.pitch);
-            switch (cmd->action) {
-                case Action::Arm:
-                    policy.Arm(now, false);
-                    break;
-                case Action::Approve:
-                    if (valid && policy.armed()) {
-                        Settings settings("head_ctl", true);
-                        settings.SetInt("verified", 1);
-                        approved = true;
-                        policy.Resume(now);
-                    }
-                    break;
-                case Action::Move:
-                    policy.Move(cmd->pose, now);
-                    break;
-                case Action::Adjust: {
-                    auto b = policy.base();
-                    policy.Move({b.yaw + cmd->pose.yaw, b.pitch + cmd->pose.pitch}, now);
-                    break;
-                }
-                case Action::Nod:
-                    policy.Gesture(false, now);
-                    break;
-                case Action::Shake:
-                    policy.Gesture(true, now);
-                    break;
-                case Action::Stop:
-                    policy.Stop(now);
-                    if (valid && torque) {
-                        torque_safety.BeginWrite();
-                        if (!(Position(1, yaw.raw) && Position(2, pitch.raw)))
-                            policy.Fault();
-                    }
-                    break;
-                case Action::Resume:
-                    if (approved)
-                        policy.Resume(now);
-                    break;
-            }
+        if (recovery.timed_out() && cmd && cmd->action != Action::Stop &&
+            cmd->action != Action::EndDance) {
+            ESP_LOGW(kTag, "Queued command cancelled: communication timeout");
+            cmd.reset();
         }
-        policy.Emotion(emotion_.load());
-        policy.Speaking(speaking_.load(), now);
-        auto target = policy.Step(now);
-        bool moving =
-            target && (std::abs(target->yaw - current.yaw) >= kSettleToleranceDegrees ||
-                       std::abs(target->pitch - current.pitch) >= kSettleToleranceDegrees ||
-                       yaw_axis.isMoving() || pitch_axis.isMoving());
-        if (moving && valid) {
-            const bool yaw_stuck = yaw_stall.Update(current.yaw, target->yaw, now);
-            const bool pitch_stuck = pitch_stall.Update(current.pitch, target->pitch, now);
-            if (yaw_stuck || pitch_stuck || yaw.load >= 650 || pitch.load >= 650 ||
-                yaw.current >= 350 || pitch.current >= 350) {
-                policy.Fault();
-                target.reset();
-                ESP_LOGE(kTag, "Head stopped: stuck=%d/%d load=%d/%d current=%d/%d", yaw_stuck,
-                         pitch_stuck, yaw.load, pitch.load, yaw.current, pitch.current);
+        if (!ready || !valid) {
+            if (cmd && (cmd->action == Action::Stop || cmd->action == Action::EndDance)) {
+                policy.Stop(now);
+                stop_during_gap = inhibit_torque = true;
+            } else if (cmd) {
+                ESP_LOGW(kTag,
+                         "Queued command cancelled: communication recovery or unsafe feedback");
             }
         } else {
-            yaw_stall.Reset();
-            pitch_stall.Reset();
-        }
-        if (target && valid) {
-            torque_safety.BeginWrite();
-            bool ok = true;
-            if (!torque) {
-                // Set the present position BEFORE enabling torque (avoid an old goal).
-                ok = Position(1, yaw.raw) && Position(2, pitch.raw) && Write(1, {40, 1}) &&
-                     Write(2, {40, 1});
-                torque = ok;
+            bool writes_ok = true;
+            policy.Feedback(current, true, now);
+            if (was_paused) {
                 yaw_axis.Reset(current.yaw);
                 pitch_axis.Reset(current.pitch);
+                yaw_stall.Reset();
+                pitch_stall.Reset();
+                ESP_LOGI(kTag, "Communication stable: 3 valid frames; springs adopted actual pose");
             }
-            if (ok) {
-                yaw_axis.Target(target->yaw, policy.speed());
-                pitch_axis.Target(target->pitch, policy.speed());
-                yaw_axis.update();
-                if (!yaw_axis.failed())
-                    pitch_axis.update();
-                ok = !yaw_axis.failed() && !pitch_axis.failed();
+            if (stop_during_gap) {
+                policy.Stop(now);  // Hold the newly measured pose, never the old interrupted goal.
+                stop_during_gap = false;
             }
-            if (!ok) {
-                policy.Fault();
-                ESP_LOGE(kTag, "Servo command failed; motion disabled");
+            if (first && approved && !policy.fault())
+                policy.Arm(now);
+            first = false;
+            policy.Idle(Application::GetInstance().GetDeviceState() == kDeviceStateIdle,
+                        yaw_axis.isMoving() || pitch_axis.isMoving(), esp_random(), now);
+            policy.Touch(head_touched_.load(), now);
+            const unsigned next_turn = turn_.load();
+            if (next_turn != current_turn) {
+                policy.BeginTurn(now);
+                current_turn = next_turn;
             }
+            if (cmd) {
+                yaw_axis.Reset(current.yaw);
+                pitch_axis.Reset(current.pitch);
+                if (cmd->action != Action::Stop && cmd->action != Action::EndDance)
+                    inhibit_torque = false;
+                switch (cmd->action) {
+                    case Action::Arm:
+                        policy.Arm(now, false);
+                        break;
+                    case Action::Approve:
+                        if (policy.armed()) {
+                            Settings settings("head_ctl", true);
+                            settings.SetInt("verified", 1);
+                            approved = true;
+                            policy.Resume(now);
+                        }
+                        break;
+                    case Action::Move:
+                        policy.Move(cmd->pose, now);
+                        break;
+                    case Action::Adjust: {
+                        auto base = policy.base();
+                        policy.Move({base.yaw + cmd->pose.yaw, base.pitch + cmd->pose.pitch}, now);
+                        break;
+                    }
+                    case Action::Nod:
+                        policy.Gesture(false, now);
+                        break;
+                    case Action::Shake:
+                        policy.Gesture(true, now);
+                        break;
+                    case Action::Dance:
+                        if (rgb_ready_.load() && !rgb_fault_.load())
+                            policy.Dance(now, esp_random());
+                        break;
+                    case Action::EndDance:
+                        policy.EndDance(now);
+                        break;
+                    case Action::Stop:
+                        policy.Stop(now);
+                        if (was_paused) {
+                            stop_during_gap = inhibit_torque = true;
+                        } else if (torque) {
+                            torque_safety.BeginWrite();
+                            writes_ok = Position(1, yaw.raw) && Position(2, pitch.raw);
+                        }
+                        break;
+                    case Action::Resume:
+                        if (approved)
+                            policy.Resume(now);
+                        break;
+                }
+            }
+            policy.Emotion(emotion_.load());
+            policy.Speaking(speaking_.load(), now);
+            auto target = policy.Step(now);
+            if (inhibit_torque || !writes_ok)
+                target.reset();
+            moving =
+                target && (std::abs(target->yaw - current.yaw) >= kSettleToleranceDegrees ||
+                           std::abs(target->pitch - current.pitch) >= kSettleToleranceDegrees ||
+                           yaw_axis.isMoving() || pitch_axis.isMoving());
+            if (moving) {
+                const bool yaw_stuck = yaw_stall.Update(current.yaw, target->yaw, now);
+                const bool pitch_stuck = pitch_stall.Update(current.pitch, target->pitch, now);
+                if (yaw_stuck || pitch_stuck) {
+                    policy.Fault(HeadFault::Stall);
+                    target.reset();
+                    ESP_LOGE(kTag, "Head stopped: mechanical stall=%d/%d", yaw_stuck, pitch_stuck);
+                }
+            } else {
+                yaw_stall.Reset();
+                pitch_stall.Reset();
+            }
+            if (target) {
+                torque_safety.BeginWrite();
+                bool ok = true;
+                if (!torque) {
+                    // Preload actual position before (possibly partially) enabling torque.
+                    ok = Position(1, yaw.raw) && Position(2, pitch.raw) && Write(1, {40, 1}) &&
+                         Write(2, {40, 1});
+                    torque = ok;
+                    yaw_axis.Reset(current.yaw);
+                    pitch_axis.Reset(current.pitch);
+                }
+                if (ok) {
+                    yaw_axis.Target(target->yaw, policy.speed());
+                    pitch_axis.Target(target->pitch, policy.speed());
+                    yaw_axis.update();
+                    if (!yaw_axis.failed())
+                        pitch_axis.update();
+                    ok = !yaw_axis.failed() && !pitch_axis.failed();
+                }
+                writes_ok = ok;
+            }
+            if (!writes_ok) {
+                if (cmd && cmd->action == Action::Stop)
+                    stop_during_gap = inhibit_torque = true;
+                if (bus_alarm)
+                    policy.Fault(HeadFault::ServoAlarm);
+                else {
+                    recovery.Fail(Now());
+                    if (recovery.timed_out())
+                        policy.Fault(HeadFault::Communication);
+                    ESP_LOGW(kTag, "Command acknowledgement lost; motion suspended");
+                }
+            }
+            if (!recovery.paused())
+                recovery.Confirm();
         }
-        if (torque_safety.ReleaseOnFault(policy.fault())) {
+        if (torque_safety.ReleaseOnFault(policy.fault() || stop_during_gap)) {
             // Release both independently, including a partially successful enable.
             Write(1, {40, 0});
             Write(2, {40, 0});
             torque = false;
+            if (bus_alarm)
+                policy.Fault(HeadFault::ServoAlarm);
         }
+        if (policy.fault() || recovery.paused() || inhibit_torque)
+            moving = false;
+        dancing_.store(policy.dancing() && !policy.fault() && !recovery.paused());
         if (policy.petting() != shown_pet) {
             shown_pet = policy.petting();
             ESP_LOGI(kTag, "Pet interaction %s", shown_pet ? "active" : "ended");
@@ -411,13 +596,27 @@ void StackchanHead::Run() {
         }
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            status_ = {
-                current,        policy.base(),  policy.target(),    yaw.raw,  pitch.raw, valid,
-                policy.armed(), policy.fault(), policy.automatic(), approved, moving};
+            status_ = {current,
+                       policy.base(),
+                       policy.target(),
+                       yaw.raw,
+                       pitch.raw,
+                       valid && ready && !recovery.paused(),
+                       policy.armed(),
+                       policy.fault(),
+                       policy.automatic(),
+                       approved,
+                       moving,
+                       recovery.paused(),
+                       policy.fault_reason()};
         }
-        if (now - last_log > (moving ? 200 : 3000)) {
+        if (wall_now - last_log > (moving ? 200 : 3000)) {
             ESP_LOGI(kTag, "%s", StatusJson().c_str());
-            last_log = now;
+            last_log = wall_now;
+        }
+        if (wall_now - last_diagnostic_log >= 5000) {
+            factory_bus.PrintDiagnostics(wall_now);
+            last_diagnostic_log = wall_now;
         }
         // Include UART work in the frame, without catch-up bursts after timeouts.
         if (xTaskGetTickCount() - frame_tick >= pdMS_TO_TICKS(40))
@@ -460,6 +659,10 @@ void StackchanHead::Console() {
                 result = Submit(Action::Nod, {}, true);
             else if (strcmp(line, "head shake") == 0)
                 result = Submit(Action::Shake, {}, true);
+            else if (strcmp(line, "head dance") == 0)
+                result = Submit(Action::Dance, {}, true);
+            else if (strcmp(line, "head dance stop") == 0)
+                result = Submit(Action::EndDance, {}, true);
             else if (strcmp(line, "head left") == 0)
                 result = Submit(Action::Move, {-10, 10}, true);
             else if (strcmp(line, "head right") == 0)
@@ -474,11 +677,34 @@ void StackchanHead::Console() {
 }
 void StackchanHead::RegisterTools() {
     auto& m = McpServer::GetInstance();
-    m.AddTool("self.robot.get_head_position",
-              "Read actual head feedback, target and completion. Robot's own left is negative yaw. "
-              "Pitch is factory calibrated; safe forward preset is yaw=0,pitch=10. Never claim "
-              "motion succeeded if feedback is invalid.",
-              {}, [this](const PropertyList&) -> ReturnValue { return StatusJson(); });
+    m.AddTool("self.robot.dance",
+              "跳舞/扭一扭: action=start starts a 15-second random head dance with flashing RGB "
+              "lights. action=stop stops dancing, restores the pre-dance pose and turns off all "
+              "RGB lights. "
+              "Touching the head, a head command, or a fault cancels dancing. Call this tool "
+              "when the user asks to dance; do not substitute a single nod or shake. Accepted "
+              "means queued; check get_head_position.dancing and fault_reason for actual status.",
+              PropertyList({Property("action", kPropertyTypeString)}),
+              [this](const PropertyList& p) -> ReturnValue {
+                  const auto s = p["action"].value<std::string>();
+                  if (s == "start")
+                      return Submit(Action::Dance);
+                  if (s == "stop")
+                      return Submit(Action::EndDance);
+                  return std::string("rejected: action must be start or stop");
+              });
+    m.AddTool(
+        "self.robot.get_head_position",
+        "Read actual head feedback, target and completion. Robot's own left is negative yaw. "
+        "Pitch is factory calibrated; safe forward preset is yaw=0,pitch=10. Never claim "
+        "motion succeeded if feedback is invalid. Read fault_reason: communication_timeout or "
+        "recovering_communication is a bus issue, not proof of a jam. Only mechanical_stall "
+        "means measured failure to move. overload means the load/current threshold was exceeded; "
+        "it is not proof of a mechanical jam. If fault=true, motion is locked: waiting will not "
+        "restart it. Once power/connection and obstruction are checked and feedback_valid=true, "
+        "use head_action resume once and verify status. Never repeatedly resume with invalid "
+        "feedback or promise it will recover merely by waiting.",
+        {}, [this](const PropertyList&) -> ReturnValue { return StatusJson(); });
     m.AddTool("self.robot.set_head_pose",
               "Control head when user asks 回正/抬头/低头/左看/右看. pose: center, up, down, left, "
               "right. Hold position afterwards. Left/right are robot's own view. Motion is small "

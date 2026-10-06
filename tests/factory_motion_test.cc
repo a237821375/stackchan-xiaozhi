@@ -178,5 +178,57 @@ int main() {
         assert(std::abs(measured.pitch - saved.pitch) < 1);
     }
     std::cout << "idle-to-touch handoff at four motion phases: PASS\n";
+    {
+        stackchan::Pose measured{0, 10};
+        stackchan::Policy policy;
+        policy.Feedback(measured, true, now);
+        assert(policy.Arm(now));
+        stackchan::FactoryAxis yaw(
+            461, -30, 30, [&] { return measured.yaw; },
+            [&](int raw) {
+                measured.yaw = (raw - 461) / 3.2f;
+                return true;
+            });
+        stackchan::FactoryAxis pitch(
+            610, 5, 60, [&] { return measured.pitch; },
+            [&](int raw) {
+                measured.pitch = (raw - 610) / 3.2f;
+                return true;
+            });
+        yaw.Reset(measured.yaw);
+        pitch.Reset(measured.pitch);
+        assert(policy.Dance(now, 19));
+        const uint32_t start = now;
+        float left = 0, right = 0, low = 60, high = 5;
+        for (int elapsed = 0; elapsed <= 17000; elapsed += 20) {
+            now = start + elapsed;
+            policy.Feedback(measured, true, now);
+            const auto target = policy.Step(now);
+            assert(target && !policy.fault());
+            yaw.Target(target->yaw, policy.speed());
+            pitch.Target(target->pitch, policy.speed());
+            const auto previous = measured;
+            yaw.update();
+            pitch.update();
+            if (std::abs(measured.yaw - previous.yaw) >= 8 ||
+                std::abs(measured.pitch - previous.pitch) >= 8)
+                std::cerr << "dance step t=" << elapsed << " before=" << previous.yaw << ","
+                          << previous.pitch << " after=" << measured.yaw << "," << measured.pitch
+                          << " target=" << target->yaw << "," << target->pitch << std::endl;
+            // Faster dance permits up to eight degrees per 20 ms command step.
+            assert(std::abs(measured.yaw - previous.yaw) < 8);
+            assert(std::abs(measured.pitch - previous.pitch) < 8);
+            assert(stackchan::Policy::FeedbackSafe(measured));
+            left = std::min(left, measured.yaw);
+            right = std::max(right, measured.yaw);
+            low = std::min(low, measured.pitch);
+            high = std::max(high, measured.pitch);
+        }
+        assert(left < -20 && right > 20 && high - low > 30);
+        assert(!policy.dancing() && std::abs(measured.yaw) < 1 &&
+               std::abs(measured.pitch - 10) < 1);
+        std::cout << "dance factory trajectory yaw=" << left << ".." << right << " pitch=" << low
+                  << ".." << high << ": PASS\n";
+    }
     std::cout << "factory spring trajectory: PASS\n";
 }
