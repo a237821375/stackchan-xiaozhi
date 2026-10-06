@@ -7,6 +7,7 @@
 #include <string>
 #include "head_calibration.h"
 #include "motion_policy.h"
+#include "motion_result.h"
 
 class StackchanHead {
 public:
@@ -28,6 +29,8 @@ private:
              moving = false;
         bool recovering = false;
         stackchan::HeadFault fault_reason = stackchan::HeadFault::None;
+        bool animation_active = false, servo_moving = false;
+        stackchan::PoseCommandResult pose_command;
     };
     std::mutex mutex_;
     Status status_;

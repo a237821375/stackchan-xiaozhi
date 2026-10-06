@@ -45,6 +45,20 @@ inline bool Reply(const Bytes& bytes, uint8_t id, size_t count, Bytes& data) {
     return true;
 }
 inline int Word(const uint8_t* p) { return (int(p[0]) << 8) | p[1]; }
+struct ServoFeedback {
+    int raw = -1, load = 0, current = 0;
+    bool moving = false;
+};
+inline bool DecodeServoFeedback(const Bytes& bytes, ServoFeedback& feedback) {
+    if (bytes.size() != 15)
+        return false;
+    feedback.raw = Word(bytes.data());
+    feedback.load = Word(bytes.data() + 4) & 0x3ff;
+    feedback.current = Word(bytes.data() + 13) & 0x7fff;
+    // SCSCL_MOVING (66) is already inside the position/current read (56..70).
+    feedback.moving = bytes[10] != 0;
+    return true;
+}
 inline void AddWord(Bytes& p, int value) {
     p.push_back((value >> 8) & 255);
     p.push_back(value & 255);

@@ -92,9 +92,7 @@ bool Position(uint8_t id, int raw) {
         [] { return ServoReportedAlarm(factory_bus.getLastError(), factory_bus.getState()); },
         RecoverBus);
 }
-struct Feedback {
-    int raw = -1, load = 0, current = 0;
-};
+using Feedback = ServoFeedback;
 bool FeedbackOf(uint8_t id, Feedback& f) {
     Bytes p;
     if (!WithBusRecovery(
@@ -102,10 +100,8 @@ bool FeedbackOf(uint8_t id, Feedback& f) {
             [] { return ServoReportedAlarm(factory_bus.getLastError(), factory_bus.getState()); },
             RecoverBus))
         return false;
-    f.raw = Word(p.data());
-    f.load = Word(p.data() + 4) & 0x3ff;
-    f.current = Word(p.data() + 13) & 0x7fff;
-    return true;  // Valid packets with unsafe positions are safety faults, not dropped frames.
+    // Valid packets with unsafe positions are safety faults, not dropped frames.
+    return DecodeServoFeedback(p, f);
 }
 }  // namespace
 
@@ -280,26 +276,34 @@ void StackchanHead::SetEmotion(const std::string& s) {
 }
 std::string StackchanHead::StatusJson() {
     std::lock_guard<std::mutex> lock(mutex_);
-    char b[640];
+    char b[1024];
+    const auto position_state =
+        PositionState(status_.valid, status_.armed, status_.animation_active, status_.servo_moving,
+                      status_.pose, status_.target);
     snprintf(
         b, sizeof(b),
         "{\"calibrated\":%s,\"calibration_restart_required\":%s,\"feedback_valid\":%s,\"armed\":%s,"
         "\"approved\":%s,\"fault\":%s,\"automatic\":%s,"
         "\"state\":\"%s\",\"yaw\":%.2f,\"pitch\":%.2f,\"target_yaw\":%.2f,\"target_pitch\":%."
         "2f,\"raw_yaw\":%d,\"raw_pitch\":%d,\"fault_reason\":\"%s\","
-        "\"dancing\":%s,\"rgb_ready\":%s}",
+        "\"dancing\":%s,\"rgb_ready\":%s,\"servo_moving\":%s,"
+        "\"pose_command_tracking\":%s,\"pose_command_finished\":%s,"
+        "\"pose_command_motion_observed\":%s,\"pose_command_target_reached\":%s}",
         calibration_.Valid() ? "true" : "false",
         calibration_restart_required_.load() ? "true" : "false", status_.valid ? "true" : "false",
         status_.armed ? "true" : "false", status_.approved ? "true" : "false",
         status_.fault ? "true" : "false", status_.automatic ? "true" : "false",
         status_.fault
             ? "fault"
-            : (status_.recovering
-                   ? "recovering_communication"
-                   : (!status_.armed ? "disabled" : (status_.moving ? "moving" : "completed"))),
+            : (status_.recovering ? "recovering_communication" : PositionName(position_state)),
         status_.pose.yaw, status_.pose.pitch, status_.target.yaw, status_.target.pitch,
         status_.raw_yaw, status_.raw_pitch, FaultName(status_.fault_reason),
-        dancing_.load() ? "true" : "false", rgb_ready_.load() ? "true" : "false");
+        dancing_.load() ? "true" : "false", rgb_ready_.load() ? "true" : "false",
+        status_.servo_moving ? "true" : "false",
+        status_.pose_command.has_command() ? "true" : "false",
+        status_.pose_command.finished() ? "true" : "false",
+        status_.pose_command.motion_observed() ? "true" : "false",
+        status_.pose_command.target_reached() ? "true" : "false");
     return b;
 }
 std::string StackchanHead::Submit(Action action, Pose pose, bool local) {
@@ -307,7 +311,8 @@ std::string StackchanHead::Submit(Action action, Pose pose, bool local) {
     const bool stopping = action == Action::Stop || action == Action::EndDance;
     if (!stopping && (!calibration_.Valid() || calibration_restart_required_.load()))
         return "rejected: local per-device calibration and restart required";
-    if (action == Action::Approve && (status_.moving || !status_.armed))
+    if (action == Action::Approve &&
+        (status_.moving || status_.animation_active || status_.servo_moving || !status_.armed))
         return "rejected: finish local probes and wait until head is stationary before approval";
     if (!stopping && status_.recovering) {
         if (status_.fault)
@@ -383,6 +388,7 @@ void StackchanHead::Run() {
     }
     bool first = true, torque = false;
     AxisStall yaw_stall, pitch_stall;
+    PoseCommandResult pose_command;
     smooth_ui_toolkit::ui_hal::on_get_tick([] { return static_cast<uint32_t>(Now()); });
     Pose current;
     FactoryAxis yaw_axis(
@@ -460,6 +466,7 @@ void StackchanHead::Run() {
         if (recovery.paused() || rgb_fault_.load())
             policy.EndDance(now);
         bool moving = false;
+        bool animation_active = false;
         std::optional<Command> cmd;
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -506,6 +513,7 @@ void StackchanHead::Run() {
                 current_turn = next_turn;
             }
             if (cmd) {
+                pose_command.Clear();
                 yaw_axis.Reset(current.yaw);
                 pitch_axis.Reset(current.pitch);
                 if (cmd->action != Action::Stop && cmd->action != Action::EndDance)
@@ -531,11 +539,14 @@ void StackchanHead::Run() {
                         break;
                     }
                     case Action::Move:
-                        policy.Move(cmd->pose, now);
+                        if (policy.Move(cmd->pose, now))
+                            pose_command.Begin(current, cmd->pose);
                         break;
                     case Action::Adjust: {
                         auto base = policy.base();
-                        policy.Move({base.yaw + cmd->pose.yaw, base.pitch + cmd->pose.pitch}, now);
+                        const Pose goal{base.yaw + cmd->pose.yaw, base.pitch + cmd->pose.pitch};
+                        if (policy.Move(goal, now))
+                            pose_command.Begin(current, goal);
                         break;
                     }
                     case Action::Nod:
@@ -601,6 +612,9 @@ void StackchanHead::Run() {
                 if (ok) {
                     yaw_axis.Target(target->yaw, policy.speed());
                     pitch_axis.Target(target->pitch, policy.speed());
+                    // Feedback was sampled before these writes. Preserve pending state so
+                    // completion waits for a fresh sample after the final factory snap.
+                    animation_active = yaw_axis.animationPending() || pitch_axis.animationPending();
                     yaw_axis.update();
                     if (!yaw_axis.failed())
                         pitch_axis.update();
@@ -633,6 +647,11 @@ void StackchanHead::Run() {
         }
         if (policy.fault() || recovery.paused() || inhibit_torque)
             moving = false;
+        animation_active =
+            animation_active || yaw_axis.animationPending() || pitch_axis.animationPending();
+        const bool servo_moving = (yaw_ok && yaw.moving) || (pitch_ok && pitch.moving);
+        pose_command.Update(current, valid && ready && !policy.fault() && !inhibit_torque,
+                            animation_active, servo_moving);
         dancing_.store(policy.dancing() && !policy.fault() && !recovery.paused());
         if (policy.petting() != shown_pet) {
             shown_pet = policy.petting();
@@ -656,7 +675,10 @@ void StackchanHead::Run() {
                        approved,
                        moving,
                        recovery.paused(),
-                       policy.fault_reason()};
+                       policy.fault_reason(),
+                       animation_active,
+                       servo_moving,
+                       pose_command};
         }
         if (wall_now - last_log > (moving ? 200 : 3000)) {
             ESP_LOGI(kTag, "%s", StatusJson().c_str());
@@ -783,7 +805,12 @@ void StackchanHead::RegisterTools() {
         "self.robot.get_head_position",
         "Read actual head feedback, target and completion. Robot's own left is negative yaw. "
         "Pitch is factory calibrated; safe forward preset is yaw=0,pitch=10. Never claim "
-        "motion succeeded if feedback is invalid. Read fault_reason: communication_timeout or "
+        "motion succeeded if feedback is invalid. state=target_not_reached means animation and "
+        "servo stopped without measured arrival; this alone is not a jam and must not trigger "
+        "repeated retries. For the latest explicit pose command, pose_command_finished only "
+        "means it stopped; check pose_command_motion_observed and pose_command_target_reached "
+        "separately. These fields do not certify an entire dance or gesture. "
+        "Read fault_reason: communication_timeout or "
         "recovering_communication is a bus issue, not proof of a jam. Only mechanical_stall "
         "means measured failure to move. overload means the load/current threshold was exceeded; "
         "it is not proof of a mechanical jam. If fault=true, motion is locked: waiting will not "

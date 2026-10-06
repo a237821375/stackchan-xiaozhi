@@ -28,6 +28,8 @@ public:
     }
     int getCurrentAngle() override { return static_cast<int>(feedback_() * 10); }
     bool failed() const { return failed_; }
+    // The final snap is a write even after the spring reports done.
+    bool animationPending() { return !_angle_anim.done() || _snap_to_target_on_rest; }
 
 protected:
     void set_angle_impl(int angle) override {

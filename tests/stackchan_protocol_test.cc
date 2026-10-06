@@ -39,6 +39,15 @@ protected:
 };
 int main() {
     using namespace stackchan;
+    Bytes feedback_bytes{1, 205, 0, 0, 0, 12, 50, 25, 0, 0, 1, 0, 0, 0, 7};
+    ServoFeedback feedback;
+    assert(DecodeServoFeedback(feedback_bytes, feedback));
+    assert(feedback.raw == 461 && feedback.load == 12 && feedback.current == 7);
+    assert(feedback.moving);
+    feedback_bytes[10] = 0;
+    assert(DecodeServoFeedback(feedback_bytes, feedback) && !feedback.moving);
+    feedback_bytes.pop_back();
+    assert(!DecodeServoFeedback(feedback_bytes, feedback));
     ServoTxFrame frame;
     const uint8_t header[]{255, 255, 1, 4, 2, 56}, payload[]{15}, checksum[]{178};
     int sends = 0;

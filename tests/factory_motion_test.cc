@@ -4,10 +4,34 @@
 #include "../main/boards/m5stack/stackchan-k151/factory_axis.h"
 #include "../main/boards/m5stack/stackchan-k151/factory_upstream/smooth_ui_toolkit/src/core/hal/hal.hpp"
 #include "../main/boards/m5stack/stackchan-k151/motion_policy.h"
+#include "../main/boards/m5stack/stackchan-k151/motion_result.h"
 
 int main() {
     uint32_t now = 0;
     smooth_ui_toolkit::ui_hal::on_get_tick([&] { return now; });
+    {
+        float pitch = 10;
+        stackchan::FactoryAxis probe_axis(
+            610, 5, 60, [&] { return pitch; },
+            [&](int raw) {
+                pitch = (raw - 610) / 3.2f;
+                return true;
+            });
+        stackchan::PoseCommandResult result;
+        probe_axis.Reset(pitch);
+        result.Begin({0, pitch}, {0, 12.59f});
+        probe_axis.Target(12.59f);
+        for (int i = 0; i < 100; ++i) {
+            const stackchan::Pose sampled{0, pitch};
+            bool pending = probe_axis.animationPending();
+            now += 20;
+            probe_axis.update();
+            pending = pending || probe_axis.animationPending();
+            result.Update(sampled, true, pending, false);
+        }
+        assert(stackchan::AtTarget({0, pitch}, {0, 12.59f}));
+        assert(result.finished() && result.target_reached());
+    }
     float actual = 27.5f;
     int writes = 0, last = -1;
     stackchan::FactoryAxis axis(
