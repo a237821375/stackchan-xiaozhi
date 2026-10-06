@@ -46,8 +46,8 @@ jobs:
       - name: Test upstream build scripts
         run: python -m unittest discover -s scripts/tests -v
 
-      - name: Test reproducible StackChan assets
-        run: python -m unittest discover -s tests -p 'test_stackchan_assets.py' -v
+      - name: Test assets, backups and installation packages
+        run: python -m unittest discover -s tests -v
 
   build-k151:
     name: Build K151 with ESP-IDF 6.0.1
@@ -191,12 +191,29 @@ jobs:
           Path('build/stackchan-build-info.json').write_text(json.dumps(info, indent=2) + '\n')
           PY
 
+      - name: Build the portable test installation package
+        run: |
+          source "$IDF_PATH/export.sh"
+          python tools/build_stackchan_release.py \
+            --build-dir build \
+            --assets-dir build/stackchan-assets \
+            --output build/stackchan-install-package \
+            --version "$(python -c 'import json; print(json.load(open("build/project_description.json"))["project_version"])')"
+          python - <<'PYZIP'
+          import shutil
+          shutil.make_archive('build/stackchan-install-package', 'zip', 'build/stackchan-install-package')
+          PYZIP
+
       - name: Upload application, custom assets and build information
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: stackchan-k151-idf6.0.1-${{ github.sha }}
           path: |
             build/xiaozhi.bin
+            build/stackchan-install-package.zip
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/ota_data_initial.bin
             build/stackchan-assets/assets.bin
             build/stackchan-assets/manifest.json
             build/stackchan-build-info.json

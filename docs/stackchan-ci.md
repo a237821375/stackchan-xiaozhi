@@ -63,3 +63,5 @@ python tools/build_stackchan_assets.py \
 工作流使用 `contents: read`，checkout 不持久化 Git 凭据。PR 通过普通 `pull_request` 运行，没有 `pull_request_target`，不读取仓库 secret，不上传到外部服务，不发布 Release 或写入仓库。工件只保存在对应 GitHub Actions 运行中。
 
 CI 成功表示该源码通过主机检查并能在固定环境下构建。真实设备的校准、方向、限位、显示屏和分区兼容性仍需按[板卡说明](../main/boards/m5stack/stackchan-k151/README.md)验收。以上固定输入减少环境变化；尚未宣称应用二进制跨机器逐字节一致，也未宣称通过本地检查等同于 GitHub 托管流水线已成功运行。
+
+安装工具测试纳入 `python -m unittest discover -s tests -v`。构建还生成 `stackchan-install-package.zip`，包含独立 bootloader、分区表、OTA 初始化、应用、自定义资源、安装脚本、中文指南和来源/许可记录。它是 CI 开发工件，不等于已经实机验收的 GitHub Release；仍须完成本机校准、分区兼容和实机验收。生成器不会打入设备备份或 NVS。
