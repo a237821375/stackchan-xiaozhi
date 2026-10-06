@@ -1,14 +1,16 @@
-# StackChan K151 / CoreS3 head-control variant
+# StackChan K151 / CoreS3 头部控制说明
+
+[返回项目中文首页](../../../../README.md)。本页前半部分描述当前实现，后半部分保留按时间排列的实验记录；较早记录中的“待验收”“暂停”等状态不能覆盖最后一次复测结果。
 
 基于 Xiaozhi v2.5.0，使用 CoreS3 原引脚及 ILI9342C、Quad PSRAM。独立板卡标识 `m5stack-stackchan-k151`，避免普通 CoreS3 OTA 包意外覆盖头部控制。
 
 本机校准数据来自设备 `80:45:6b:4d:3a:94` 的原厂备份：yaw zero 461、pitch zero 610；SCSCL big-endian 总线 UART1 TX6/RX7，1 Mbps，ID1/ID2。不是通用舵机固件：MAC 不匹配时不启动舵机控制。没有舵机 EEPROM/永久零点写入。
 
-启动时按原厂流程通过 I2C 0x6f 的 PY32 扩展器 pin 0 开启 VM_EN 舵机电源；对方向、上下拉和输出寄存器逐项读改写及回读，不改其它引脚。等待舵机启动并有限次重试读取限位。首次启动只读取舵机寄存器诊断，不自动回正或使能扭矩。默认活动边界 yaw -30..30°、pitch 5..60°，回正位置 (0,10)；pitch 是原厂坐标，不是以水平 0° 为原点的倾角。需先实测方向和安全范围。
+启动时按原厂流程通过 I2C 0x6f 的 PY32 扩展器 pin 0 开启 VM_EN 舵机电源；对方向、上下拉和输出寄存器逐项读改写及回读，不改其它引脚。等待舵机启动并有限次重试读取限位。尚无本地验收标志时只读取舵机寄存器诊断，不自动回正或使能扭矩；已验收设备在有效反馈和安全配置检查通过后可启用自动动作，但不强制开机回正。默认活动边界 yaw -30..30°、pitch 5..60°，回正位置 (0,10)；pitch 是原厂坐标，不是以水平 0° 为原点的倾角。需先实测方向和安全范围。
 
 USB 控制台维护命令：`head status` / `head diag`（只读寄存器诊断）；有效反馈后 `head arm` 临时启用；`head probe yaw` / `head probe pitch` 各增量 2°；`head stop`；`head center`；`head nod` / `head shake`；`head left` / `head right`。确认硬件后 `head approve` 仅在新 NVS 命名空间 `head_ctl/verified` 中记录验收标志，后续启动仍先读取反馈，不强制回正。AI 无权执行本地校准验收命令。
 
-AI 工具：`self.robot.get_head_position`、`set_head_pose`、`adjust_head`、`head_action`。入队返回 accepted 并非已到位；状态查询提供反馈和目标。首次硬件未验收时工具会报告未启用。停止保持当前姿态并关闭微动作；恢复需已验收和有效反馈。
+AI 工具：`self.robot.get_head_position`、`self.robot.set_head_pose`、`self.robot.adjust_head`、`self.robot.head_action`、`self.robot.dance`。入队返回 accepted 并非已到位；状态查询提供反馈和目标。首次硬件未验收时工具会报告未启用。停止保持当前姿态并关闭微动作；恢复需已验收和有效反馈。
 
 讲话微动作每轮最多两次，间隔至少 4.5 秒，默认约 3°。明确点头使用 12°/10° 两次动作，摇头使用 ±18°/±15° 两次往返，每段 400 ms（边界处限幅）。讲话微动作仍为 3°、每段 450 ms。明确姿态指令取消本轮微动作；下一轮围绕新姿态运动。嘴巴由播放状态选择 `<emotion>` / `<emotion>_talk` 素材，sleepy 不切换；这不是音素级唇形同步。资源包需使用 `tools/build_stackchan_assets.py` 生成，约 5.2 MB，保留唤醒词/字体与 hide_subtitle。
 
@@ -27,7 +29,11 @@ AI 工具：`self.robot.get_head_position`、`set_head_pose`、`adjust_head`、`
 运行时舵机反馈、位置和扭矩操作遇到通信校验/超时错误时，等待20ms并清除迟到数据后只重试一次。相同位置和扭矩写入可重复执行；舵机报警不重试。重试失败先暂停运动并冻结策略时钟，连续3组两轴完整、有效反馈后，从实测角度重置弹簧并继续；总恢复期限500ms不会被再次丢包或写入失败延长。恢复期间不发送新位置/使能命令，不把缺失值-1转换为角度，不用旧反馈继续运动。保持最后一个已发送的小步目标；超过期限则锁定故障并尝试释放扭矩。Stop始终取消待恢复动作，暂停时Stop会释放扭矩且恢复后禁止自动使能。确认的报警、超载、越界立即锁定，恢复通信不会清除这些保护。状态区分recovering_communication、communication_timeout、mechanical_stall、overload、servo_alarm、unsafe_feedback_or_configuration，AI不可将通信异常直接描述为机械卡住。
 
 UART适配层将原厂FTServo分段构造的请求缓存为单帧后一次发送，接收使用ESP-IDF缓冲阻塞读取，避免逐字节零tick轮询。原厂包格式、校验和Servo动画保持不变；该传输适配仍需实机验证其对偶发通信错误的改善。
-# 跳舞指令（2026-10-01）
+## 历史开发与诊断记录
+
+以下按开发时间记录，备份和本地日志路径仅用于追溯，文件不包含在仓库中。最终恢复结果见本节末尾，尚未确认串口错码根因。
+
+### 跳舞指令（2026-10-01）
 
 设备工具 `self.robot.dance`：`action=start` 运行约 15 秒大幅随机左右/上下动作，
 同时控制原厂 12 颗 RGB 灯每约 200 毫秒交替换色；`action=stop` 结束并恢复原姿态、关闭灯光。

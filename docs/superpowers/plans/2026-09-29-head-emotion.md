@@ -1,6 +1,6 @@
-# StackChan Head Emotion Implementation Plan
+# StackChan 头部情绪动作实施计划（历史归档）
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox syntax for tracking.
+> 本文为 2026-09-29 的历史实施计划，保留当时的英文正文用于追溯，不是当前待执行指令。后续实现与实机记录以项目中文首页和板卡说明为准。
 
 **Goal:** Add bounded AI head positioning, speaking micro-movements, and state-linked mouth animation to the working Xiaozhi device.
 **Architecture:** A single board-local worker owns the feedback servo UART. A portable controller enforces limits and command precedence; MCP and display hooks submit commands only. Existing cloud, audio, assets and partition behavior remain intact.

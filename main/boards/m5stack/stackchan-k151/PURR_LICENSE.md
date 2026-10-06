@@ -1,18 +1,18 @@
-# Cat purr recording
+# 猫咪呼噜录音：来源与处理说明
 
-- Author: Kerzoven
-- Title: Cat Purr & Meow — `cat_purrsleepy_loop.wav`
-- Source: https://opengameart.org/content/cat-purr-meow
-- Download: https://opengameart.org/sites/default/files/cat_purrsleepy_loop.wav
-- License: CC0 1.0 https://creativecommons.org/publicdomain/zero/1.0/
-- Retrieved: 2026-09-29
+- 作者：Kerzoven
+- 原作品：Cat Purr & Meow，文件 `cat_purrsleepy_loop.wav`
+- 来源：[OpenGameArt 作品页](https://opengameart.org/content/cat-purr-meow)
+- 原录音：[WAV 文件](https://opengameart.org/sites/default/files/cat_purrsleepy_loop.wav)
+- 许可：[CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)
+- 获取日期：2026-09-29
 
-`purr_pcm.h` is a derivative: 24 kHz, mono, signed 16-bit PCM with a 40 ms
-crossfade at the loop seam. Recreate with Python 3.11:
-`python tools/convert_purr.py /path/to/cat_purrsleepy_loop.wav`.
-Source checksum is recorded in the generated header.
+`purr_pcm.h` 是处理后的衍生数据：24 kHz、单声道、有符号 16 位 PCM，循环接缝使用 40 ms 交叉淡化。可在 Python 3.11 环境中重新生成：
 
-Runtime gain is 25% of the recording, with approximately 333 ms fade-in/out.
-Master volume is unchanged. Only idle playback is eligible; speech, listening,
-network transitions, alerts and pending decoder work take priority. Petting state
-already includes the existing three-second release hold; audio adds no extra hold.
+```sh
+python tools/convert_purr.py /path/to/cat_purrsleepy_loop.wav
+```
+
+原始录音校验和记录在生成的头文件中。运行时增益为原录音的 25%，淡入和淡出约 333 ms，不改变设备主音量。
+
+仅待机条件下允许播放，讲话、聆听、网络切换、提示音及待处理的解码任务优先。摸头状态已包含松手后约 3 秒的保留时间，音频不会再延长该时间。
