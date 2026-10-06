@@ -106,9 +106,16 @@ class InstallTests(unittest.TestCase):
     def test_manifest_board_and_extra_file_rejected(self):
         self.manifest['files']['nvs']=dict(self.manifest['files']['app']); self.save()
         with self.assertRaises(ValueError): self.plan()
+    def test_missing_calibration_install_keeps_head_disabled(self):
+        data=bytearray(self.data); data[0x9000:0xd000]=b'\xff'*0x4000
+        self.data=bytes(data); self.meta=installer.backup_metadata(self.data,'unit-a')
+        self.assertIsNone(self.meta['calibration'])
+        self.assertIsNone(self.plan()['calibration'])
+        directory=self.root/'missing-calibration'
+        self.assertIsNone(installer.save_backup(directory,self.data,'unit-a')['calibration'])
     def test_unknown_calibration_does_not_discard_private_backup(self):
         data = bytearray(self.data)
-        data[0x9000:0xd000] = b'\xff' * 0x4000
+        data[0x901c] ^= 1  # Corrupted NVS page CRC must still stop installation.
         directory = self.root/'private'
         with self.assertRaises(ValueError): installer.save_backup(directory,bytes(data),'unit-a')
         self.assertEqual((directory/'flash.bin').read_bytes(),bytes(data))
@@ -158,10 +165,12 @@ class InstallTests(unittest.TestCase):
             def read_flash(self,*args): events.append('read'); return b'test'
         chip=Chip()
         api=SimpleNamespace(__version__='5.4.0',detect_chip=lambda **kw:chip,
-                            run_stub=lambda esp:esp,attach_flash=lambda esp:events.append('attach'))
+                            run_stub=lambda esp:esp,attach_flash=lambda esp:events.append('attach'),
+                            read_flash=lambda esp,offset,size,**kwargs:(events.append(('public-read',offset,size,kwargs.get('flash_size'))),esp.read_flash(offset,size))[1])
         cmds=SimpleNamespace(detect_flash_size=lambda esp:'16MB')
         with patch.dict(sys.modules,{'esptool':api,'esptool.cmds':cmds}):
             dev=installer.Device('fake'); self.assertEqual(dev.read(0,4),b'test'); dev.close()
+        self.assertIn(('public-read',0,4,'16MB'),events)
         self.assertIn('attach',events)
         self.assertLess(events.index('attach'),events.index(('parameters',0x1000000)))
         self.assertLess(events.index(('parameters',0x1000000)),events.index('read'))

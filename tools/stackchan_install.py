@@ -13,7 +13,7 @@ from pathlib import Path
 import struct
 import sys
 import zlib
-from stackchan_backup import calibration_from_flash, partitions_from_flash
+from stackchan_backup import MissingCalibration, calibration_from_flash, partitions_from_flash
 from build_stackchan_release import validate_image, _resources, _STATES
 
 FLASH_SIZE = 0x1000000
@@ -36,8 +36,12 @@ def backup_metadata(data: bytes, identity: str) -> dict:
     partitions = partitions_from_flash(data)
     if any(p['flags'] for p in partitions):
         raise ValueError('Encrypted/flagged partitions are unsupported')
+    try:
+        calibration = calibration_from_flash(data)
+    except MissingCalibration:
+        calibration = None  # Firmware starts with motion disabled until local calibration.
     return dict(schema=1, device_identity=identity, sha256=digest(data),
-                size=len(data), partitions=partitions, calibration=calibration_from_flash(data))
+                size=len(data), partitions=partitions, calibration=calibration)
 
 
 def _package(root: Path):
@@ -167,7 +171,8 @@ class Device:
             self.close()
             raise
     def read(self, offset, size):
-        return self.esp.read_flash(offset,size)
+        # Use the same initialization/progress path as the official read-flash command.
+        return self.api.read_flash(self.esp,offset,size,flash_size='16MB')
     def close(self):
         self.esp._port.close()
     def write(self, pairs):
@@ -252,7 +257,10 @@ def main(argv=None):
             raise ValueError('Post-install NVS verification failed; do not boot or discard backup')
         print('Firmware verified; NVS is byte-for-byte unchanged. Short-press RST to boot.')
         c=plan['calibration']
-        print(f"Local calibration command if required: head calibrate {c['yaw_zero']} {c['pitch_zero']}")
+        if c is not None:
+            print(f"Local calibration command if required: head calibrate {c['yaw_zero']} {c['pitch_zero']}")
+        else:
+            print('No stored calibration. Head stays disabled; obtain reliable zeros for THIS unit before local calibration.')
         print('Calibration is NOT approval. Follow the local two-axis validation guide before head approve.')
         return 0
     except (ValueError,OSError,KeyError,TypeError) as error:

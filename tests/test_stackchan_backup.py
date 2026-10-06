@@ -85,6 +85,16 @@ class BackupTests(unittest.TestCase):
     def setUp(self):
         self.assertIsNotNone(backup, "Portable read-only backup API is missing")
 
+    def test_empty_calibration_has_distinct_error_from_partial_record(self):
+        self.assertTrue(hasattr(backup,'MissingCalibration'))
+        with self.assertRaises(backup.MissingCalibration): backup.calibration_from_flash(flash())
+        incomplete = page([integer(0,'servo',1,1),integer(1,'zero_pos_1',460)])
+        try:
+            backup.calibration_from_flash(flash(incomplete))
+        except ValueError as error:
+            self.assertNotIsInstance(error,backup.MissingCalibration)
+        else:
+            self.fail('Partial calibration must fail validation')
     def test_partition_table_with_and_without_md5(self):
         for md5 in (True, False):
             self.assertEqual(backup.partitions_from_flash(flash(md5=md5)), [

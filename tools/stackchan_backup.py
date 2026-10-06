@@ -24,6 +24,10 @@ import hashlib
 import struct
 import zlib
 
+class MissingCalibration(ValueError):
+    """Plain NVS validates but contains no servo/head_cal records."""
+
+
 _TABLE_OFFSET = 0x8000
 _TABLE_SIZE = 0xc00
 _PAGE_SIZE = 4096
@@ -239,6 +243,8 @@ def calibration_from_flash(data: bytes) -> dict:
             raise ValueError("Encrypted or unsupported NVS partition flags")
         start = partition["offset"]
         candidates.extend(_partition_calibration(data[start:start + partition["size"]]))
+    if not candidates:
+        raise MissingCalibration('Required calibration record is missing')
     yaw, pitch = _one([(y, p) for y, p, _ in candidates])
     if not 96 <= yaw <= 927 or not 0 <= pitch <= 831:
         raise ValueError("Calibration encoder zeros are outside safe bounds")

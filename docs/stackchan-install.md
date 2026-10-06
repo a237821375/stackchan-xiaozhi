@@ -23,7 +23,7 @@ python tools/stackchan_install.py backup --port /dev/cu.usbmodemXXXX --output ba
 
 替换串口路径。Windows 类似 `COM5`，Linux 类似 `/dev/ttyACM0`。备份会进入下载模式、上传临时 RAM 读写工具并读取 16MiB Flash；不写入固件、不擦除 Flash。结束后设备留在下载模式。如果只是备份，短按 RST 正常启动；准备立即安装可保持此状态。
 
-`backups/before-install/flash.bin` 和 `backup.json` **仅在本机保存，不发送到 Issue、聊天或仓库**，完整 Flash 含个人配置。工具验证分区和 NVS CRC，只输出两个舵机零点，不输出其他 NVS 值。不支持加密、安全启动、其他容量、不完整备份或存在冲突的校准记录；失败时停止，不猜零点。
+`backups/before-install/flash.bin` 和 `backup.json` **仅在本机保存，不发送到 Issue、聊天或仓库**，完整 Flash 含个人配置。工具验证分区和 NVS CRC，只输出两个舵机零点，不输出其他 NVS 值。不支持加密、安全启动、其他容量、不完整备份或存在冲突的校准记录；失败时停止，不猜零点。若 NVS 完整有效但完全没有校准记录，显示 `calibration=null`，允许安装，但固件头部保持禁用，必须另取本台可靠记录才能启用。残缺、冲突、越界或 CRC 损坏的记录仍会拒绝安装。
 
 ## 首次切换
 
@@ -50,7 +50,7 @@ python tools/stackchan_install.py install --package . --backup backups/before-up
 
 ## 本台校准和运动验收
 
-备份工具显示本台 `yaw_zero`、`pitch_zero`，安装结束显示相应的 `head calibrate ...` 命令。不要照抄他人的数值，也不要把当前姿态的 raw 读数当作零点。
+备份含校准记录时，工具显示本台 `yaw_zero`、`pitch_zero`，安装结束显示相应的 `head calibrate ...` 命令。如果当前系统未保存零点，必须从这台机器自己的可靠原厂备份或校准记录取得，保持头部禁用直到本地配置和验收；不能用其他机器的备份填补。不要照抄他人的数值，也不要把当前姿态的 raw 读数当作零点。
 
 用 115200 波特率串口终端查看 `head status`。如果缺少有效配置，输入工具输出的本台 `head calibrate ...`，短按 RST，然后重新连接。读取 `head calibration`、`head status`，确认配置已载入、反馈正常。按照[完整校准指南](stackchan-calibration.md)执行 `head arm` 和两个 2° 小幅探测、回正及实际方向/范围检查；全部由人确认后在静止状态输入 `head approve`。
 
