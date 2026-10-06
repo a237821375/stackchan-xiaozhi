@@ -15,6 +15,8 @@
 
 完整的跳舞、头部动作、设备控制与触摸操作见[交互指令列表](README.md#交互指令列表)。
 
+当前版本 0.1.0-alpha.1；首次配置和旧版本升级均需阅读[本地校准指南](docs/stackchan-calibration.md)，缺失校准时头部不动。
+
 请先阅读[项目首页](README.md)中的适配与完成情况。构建、资源和接口说明见[开发指南](docs/stackchan-development.md)。
 
 项目保留 [MIT 许可证](LICENSE)，上游来源与其他素材许可见项目首页。

@@ -1,6 +1,10 @@
 # StackChan：会回应摸摸头的小机器人
 
+[![StackChan CI](https://github.com/a237821375/stackchan-xiaozhi/actions/workflows/stackchan.yml/badge.svg?branch=stackchan-head-control)](https://github.com/a237821375/stackchan-xiaozhi/actions/workflows/stackchan.yml)
+
 为 **M5Stack StackChan K151 / CoreS3** 开发的机器人固件：黑底萌脸、讲话动嘴、语音控制头部、待机张望、摸头回应，以及跳舞时的 RGB 灯效。
+
+当前源码版本：**0.1.0-alpha.1（实验预发布）**。首次使用需要本机校准；本次仓库修订未烧录机器人。
 
 我们希望它聊天时有一点小动作，闲下来会看看周围，被摸头时会抬起脸回应，听到“跳舞”时能摇头晃脑。这些表情与运动交互，是本仓库重点开发的内容。
 
@@ -107,10 +111,10 @@
 
 本项目实测对象是 **StackChan K151、CoreS3 / ESP32-S3、16 MB Flash、8 MB Quad PSRAM、ILI9342C 显示配置**，使用原有底座、反馈舵机与头顶触摸传感器。其他显示屏修订版尚未验证。
 
-**当前提供开发源码，尚无通用烧录包。** 舵机零点和 MAC 启用检查来自一台已验收设备；另一台机器人需要重新核对校准、方向、限位和显示屏，不能直接删除检查后启用运动。基础表情资源输入 `assets.bin` 也不包含在 Git 中。
+**当前提供开发源码，尚无通用烧录包。** 每台设备单独保存零点并通过本地验收，缺失或损坏时头部保持禁用；原版本的验收标志不会自动沿用。见[校准指南](docs/stackchan-calibration.md)。表情包从本次标准构建的公开字体、唤醒模型和仓库绘图代码生成，见[开发指南](docs/stackchan-development.md)。
 
 - 2026-10-01：完整断电后，一分钟静止采样、一次跳舞和自动待机复测没有出现通信错误或锁定故障。
-- 2026-10-06：Mac M4 ARM64 上主机测试、81 项 Python 构建脚本测试和 ESP-IDF 6.0.1 板卡编译通过。
+- 2026-10-06：0.1.0-alpha.1 在 Mac M4 ARM64 上通过 10 组 C++ 主机回归、81 项构建脚本测试、9 项资源测试与 ESP-IDF 6.0.1 K151 编译；实际生成 41 GIF，资源包 5,240,144 字节，字体与模型保留。新校准流程未实机验收。
 - 猫咪呼噜声尚未在实机实现。2026-10-06 已移除相关运行代码、录音与专用测试；摸头表情和动作保留。
 - 舵机偶发串口错码的根因仍未确定；上述短期测试不能证明长期完全稳定。详细过程见[板卡说明与诊断记录](main/boards/m5stack/stackchan-k151/README.md)。
 
@@ -118,6 +122,9 @@
 
 - [开发指南](docs/stackchan-development.md)：获取源码、编译、生成表情资源、AI 工具参数和测试命令。
 - [板卡说明](main/boards/m5stack/stackchan-k151/README.md)：校准、硬件接口、动作参数、保护和实机记录。
+- [自动测试与依赖](docs/stackchan-ci.md)：固定 SDK、组件 lock、资源生成和构建工件。
+- [实机验收清单](docs/stackchan-hardware-validation.md)：长时间待机、动作抢占、摸头与故障恢复。
+- [版本记录](CHANGELOG.md)：项目自身版本与升级变化。
 - [贡献与问题反馈](CONTRIBUTING.md)：如何报告问题、提交改动和更新文档。
 
 独立板卡目录为 `m5stack/stackchan-k151`，变体为 `m5stack-stackchan-k151`。使用 ESP-IDF 6.0.1 或以上版本开发；当前默认分支为 `stackchan-head-control`。
@@ -126,6 +133,6 @@
 
 语音对话基础来自 [XiaoZhi ESP32](https://github.com/78/xiaozhi-esp32) v2.5.0，头部驱动与弹簧动画参考 [M5Stack StackChan](https://github.com/m5stack/StackChan)。本项目是个人开发项目。
 
-保留上游 [MIT 许可证](LICENSE)及[原厂依赖的来源与许可](main/boards/m5stack/stackchan-k151/factory_upstream/README.md)。呼噜音频尝试已从当前版本移除，素材来源和许可可在历史提交中追溯。
+保留上游 [MIT 许可证](LICENSE)及[原厂依赖的来源与许可](main/boards/m5stack/stackchan-k151/factory_upstream/README.md)。字体、模型与构建工件的通知见[资源来源说明](docs/stackchan-assets-provenance.md)。呼噜音频尝试已从当前版本移除，素材来源和许可可在历史提交中追溯。
 
-请勿提交整机备份、NVS、联网原始日志、密码或 Token。历史设计与交接文件保留在 `docs/` 中，仅用于追溯，当前行为以本首页和板卡说明为准。
+请勿提交整机备份、NVS、联网原始日志、密码或 Token。历史实验与交接文件保留在 `docs/stackchan-history/`，历史设计位于 `docs/superpowers/`，均已标记归档，仅用于追溯，当前行为以本首页和板卡说明为准。

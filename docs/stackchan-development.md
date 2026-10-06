@@ -18,6 +18,8 @@ cd stackchan-xiaozhi
 ```sh
 source /path/to/esp-idf/export.sh
 idf.py --version
+# 使用锁定依赖，跳过可选的新版本提示（仍校验当前依赖）
+export IDF_COMPONENT_CHECK_NEW_VERSION=0
 
 python scripts/build.py m5stack/stackchan-k151 \
   --name m5stack-stackchan-k151 \
@@ -29,29 +31,24 @@ python scripts/build.py m5stack/stackchan-k151 \
 
 ### 表情资源
 
-资源生成入口是 `tools/build_stackchan_assets.py`，绘制和打包源码在 `tools/stackchan-face-sources/`。先将与当前固件匹配、包含字体和唤醒词模型的基础资源文件放到：
-
-```text
-tools/stackchan-face-sources/factory-style-talking-20260929/assets.bin
-```
-
-该文件必须是资源包，不能使用整机 Flash 或 NVS 备份代替。仓库不提供基础资源下载或通用预打包固件。
-
-在已安装 Pillow 的 Python 环境中运行：
+先运行上面的标准构建，生成与当前配置匹配的 `build/generated_assets.bin`。它来自公开组件，包含字体和唤醒词模型，无需任何个人备份。
 
 ```sh
+python -m pip install -r tools/requirements-stackchan.txt
 python tools/build_stackchan_assets.py \
-  --source tools/stackchan-face-sources/factory-style-talking-20260929 \
-  --output /tmp/stackchan-assets
+  --base-assets build/generated_assets.bin \
+  --output build/stackchan-assets
 ```
 
-脚本生成 `gifs/`、`assets.bin` 和 `manifest.json`，检查 320×240 尺寸、动嘴状态、资源大小和打包一致性，并保留基础包的字体/唤醒词资源。嘴巴按讲话状态切换，不是音素级唇形同步。
+默认绘图源码为 `tools/stackchan-face-sources/factory-style-talking-20260929/generate.py`；也可显式传入 `--source`。不要把整机 Flash、NVS 或旧设备的资源包作为基础输入。`otto-20260929` 仅为历史脚本，当前生成器不依赖它。
 
-`otto-20260929/prepare_assets.py` 是保留的历史脚本；当前流程只导入它的打包/解包函数，不应直接运行它依赖旧备份目录的入口。
+生成 `gifs/`、`assets.bin` 和 `manifest.json`，检查全部 41 个 320×240 GIF、动嘴状态、黑底、不透明、循环时长、资源大小和打包一致性，并核对字体/唤醒词资源字节未变。嘴巴按讲话状态切换，不是音素级唇形同步。Pillow 版本固定；需要换版本时重新验证输出。
+
+`build/xiaozhi.bin` 与 `build/stackchan-assets/assets.bin` 是两份需要匹配的产物。构建脚本内部的默认合并包仍带基础表情，**不等于包含上述 GIF 的可交付整包**。当前不发布通用刷机包，CI 工件用途见[说明](stackchan-ci.md)。素材与模型来源见[资源许可说明](stackchan-assets-provenance.md)。
 
 ### 部署前核对
 
-先完成本台设备的校准和小幅动作验收，保存当前完整备份，核对显示屏、分区布局和资源包。历史记录里的 `ota_0` 地址只适用于当时那台设备，不能当作所有 K151 的通用烧录地址。这里不提供一条覆盖所有分区的烧录命令；不能用“编译成功”推断可以安全覆盖 NVS、分区表或 bootloader。
+部署前保存当前完整备份，核对显示屏、分区布局和资源包；运行后先按[校准指南](stackchan-calibration.md)配置本台设备、读取反馈并完成小幅动作验收，之后才启用自动或 AI 动作。历史记录里的 `ota_0` 地址只适用于当时那台设备，不能当作所有 K151 的通用烧录地址。这里不提供一条覆盖所有分区的烧录命令；不能用“编译成功”推断可以安全覆盖 NVS、分区表或 bootloader。
 
 ## AI 头部控制接口
 
@@ -85,6 +82,13 @@ bash tools/test_stackchan.sh
 
 # 上游构建脚本测试
 python -m unittest discover -s scripts/tests -v
+
+# 资源结构、输入损坏、41个表情状态与保留模型测试
+python -m unittest discover -s tests -p 'test_stackchan_assets.py' -v
 ```
 
 主机 C++ 测试脚本需要 Bash、`clang++` 和 `rg`（ripgrep），并使用 AddressSanitizer / UndefinedBehaviorSanitizer；目前在 Mac M4 上验证。测试通过仍需真实设备验收。提交问题和改动前，请阅读[贡献与问题反馈说明](../CONTRIBUTING.md)。
+
+## 复现基线
+
+主机脚本使用 Python 3.11，资源依赖见 `tools/requirements-stackchan.txt`；组件精确解析结果见 `dependencies.lock`。CI 固定 ESP-IDF 6.0.1，锁文件目标 ESP32-S3。使用 6.1 或其他目标需重新验证依赖和构建，不能宣称与基线输出一致。版本、SHA 与测试结果应随问题报告保存。

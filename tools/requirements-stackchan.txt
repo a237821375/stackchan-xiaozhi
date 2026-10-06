@@ -1,0 +1,2 @@
+# Tested host dependency for tools/build_stackchan_assets.py.
+Pillow==12.3.0

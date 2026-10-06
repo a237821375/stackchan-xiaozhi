@@ -23,7 +23,7 @@ def eye(im,cx,cy,weight,angle,diam=20):
     tile=tile.rotate(-angle,resample=Image.Resampling.BICUBIC)
     im.paste(tile,(round((cx-20)*S),round((cy-20)*S)))
 
-def render(name,t):
+def render(name,t,*,talking=False):
     im=Image.new('RGB',(W*S,H*S),'black'); d=ImageDraw.Draw(im)
     def line(points,fill='white',width=2): d.line([(int(x*S),int(y*S)) for x,y in points],fill=fill,width=max(1,round(width*S)),joint='curve')
     def ellipse(box,fill): d.ellipse(tuple(round(v*S) for v in box),fill=fill)
@@ -47,16 +47,16 @@ def render(name,t):
     diam=24 if name=='shocked' else 22 if name=='surprised' else 20
     eye(im,90+gx,104+gy,lw,angle,diam)
     eye(im,230+gx,104+gy,rw,-angle,diam)
-    # Every emotion articulates, retaining its eye expression. Periodic envelope
-    # varies syllable strength and gives a gentle pause at the loop seam.
+    # Talking articulates every non-sleepy emotion, retaining its eye expression.
+    # Idle states always keep a closed mouth. The envelope pauses at the seam.
     syllable=.5-.5*math.cos(phase*14)
     envelope=.35+.65*(.5-.5*math.cos(phase*3))
     amplitude=48 if name in ('sleepy','relaxed','sad') else 72
     mw=3+amplitude*syllable*envelope
-    if name in ('neutral','sleepy'): mw=0
+    if name=='sleepy' or not talking: mw=0
     width=90-.30*mw; height=6+.44*mw; radius=.16*mw
     my=146+.9*math.sin(phase)
-    if name in ('neutral','sleepy'): my=146
+    if name=='sleepy' or not talking: my=146
     # The mouth uses the official width/height/radius mapping.
     if name=='kissy': width=26+mw*.10; height=6+mw*.34; radius=5+mw*.06
     d.rounded_rectangle(((160-width/2)*S,(my-height/2)*S,(160+width/2)*S,(my+height/2)*S),radius=radius*S,fill='white')
@@ -91,19 +91,19 @@ for color in ((225,50,50),(232,138,150),(121,190,235)):
 palette += [0]*(768-len(palette))
 pal=Image.new('P',(1,1)); pal.putpalette(palette)
 
-def save_gif(name,dest):
-    frames=[render(name,j/75).quantize(palette=pal,dither=Image.Dither.NONE) for j in range(75)]
+def save_gif(name,dest,*,talking=False):
+    frames=[render(name,j/75,talking=talking).quantize(palette=pal,dither=Image.Dither.NONE) for j in range(75)]
     frames[0].save(dest,save_all=True,append_images=frames[1:],duration=80,loop=0,optimize=False,disposal=1)
 
 def main():
     (ROOT/'gifs').mkdir(exist_ok=True); (ROOT/'demos').mkdir(exist_ok=True)
-    for name in NAMES: save_gif(name,ROOT/'gifs'/f'{name}.gif')
-    save_gif('speaking',ROOT/'demos'/'speaking.gif')
-    font=ImageFont.truetype('/System/Library/Fonts/STHeiti Medium.ttc',14)
+    for name in NAMES: save_gif(name,ROOT/'gifs'/f'{name}.gif',talking=name not in ('neutral','sleepy'))
+    save_gif('neutral',ROOT/'demos'/'speaking.gif',talking=True)
+    font=ImageFont.load_default(size=14)
     sheet=Image.new('RGB',(320*4,270*6),'#202024'); sd=ImageDraw.Draw(sheet)
     for i,(name,label) in enumerate(zip(NAMES,LABELS)):
         x=(i%4)*320; y=(i//4)*270
-        sheet.paste(render(name,.4),(x,y)); sd.text((x+12,y+246),f'{label} / {name}',font=font,fill='white')
+        sheet.paste(render(name,.4,talking=name not in ('neutral','sleepy')),(x,y)); sd.text((x+12,y+246),name,font=font,fill='white')
     sheet.save(ROOT/'contact-sheet.png')
     entries=[]
     for path in sorted((ROOT/'gifs').glob('*.gif'))+list((ROOT/'demos').glob('*.gif')):

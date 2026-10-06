@@ -88,6 +88,6 @@ The build script changes local `sdkconfig` and build state. Do not assume the bu
 - Audio design: `main/audio/README.md`
 - Code style: `docs/code_style.md`
 - Protocols: `docs/websocket.md`, `docs/mqtt-udp.md`, `docs/mcp-protocol.md`
-- CI matrix: `.github/workflows/build.yml`
+- CI matrix: `.github/workflows/build.yml` (upstream), `.github/workflows/stackchan.yml` and `docs/stackchan-ci.md` (StackChan default branch)
 
 Keep detailed or fast-changing information in those files, not here. Add a nested `AGENTS.md` only when a subsystem needs specialized instructions.

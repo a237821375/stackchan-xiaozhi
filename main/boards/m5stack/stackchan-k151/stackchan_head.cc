@@ -1,11 +1,11 @@
 #include "stackchan_head.h"
 #include <driver/uart.h>
 #include <esp_log.h>
-#include <esp_mac.h>
 #include <esp_random.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <nvs.h>
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -20,14 +20,33 @@
 #include "mcp_server.h"
 #include "servo_power.h"
 #include "servo_protocol.h"
-#include "settings.h"
 
 namespace {
 using namespace stackchan;
 constexpr auto kUart = UART_NUM_1;
 constexpr char kTag[] = "StackchanHead";
-// This unit's original factory NVS: servo/zero_pos_1=461, zero_pos_2=610.
-constexpr int kYawZero = 461, kPitchZero = 610;
+HeadCalibration LoadCalibration() {
+    HeadCalibration value;
+    nvs_handle_t handle = 0;
+    if (nvs_open("head_cal", NVS_READONLY, &handle) != ESP_OK)
+        return value;
+    size_t size = sizeof(value);
+    const auto result = nvs_get_blob(handle, "config", &value, &size);
+    nvs_close(handle);
+    return result == ESP_OK && size == sizeof(value) && value.Valid() ? value : HeadCalibration{};
+}
+bool SaveCalibration(const HeadCalibration& value) {
+    if (!value.Valid())
+        return false;
+    nvs_handle_t handle = 0;
+    if (nvs_open("head_cal", NVS_READWRITE, &handle) != ESP_OK)
+        return false;
+    auto result = nvs_set_blob(handle, "config", &value, sizeof(value));
+    if (result == ESP_OK)
+        result = nvs_commit(handle);
+    nvs_close(handle);
+    return result == ESP_OK;
+}
 int64_t Now() { return esp_timer_get_time() / 1000; }
 int Raw(float angle, int zero) { return zero + static_cast<int>(std::lround(angle * 3.2f)); }
 float Degrees(int raw, int zero) { return (raw - zero) / 3.2f; }
@@ -66,6 +85,8 @@ bool Write(uint8_t id, const Bytes& data) {
         RecoverBus);
 }
 bool Position(uint8_t id, int raw) {
+    if (!EncoderPositionSafe(raw))
+        return false;
     return WithBusRecovery(
         [&] { return BusOk(factory_bus.WritePos(id, raw, 20, 0), 1, id); },
         [] { return ServoReportedAlarm(factory_bus.getLastError(), factory_bus.getState()); },
@@ -91,10 +112,16 @@ bool FeedbackOf(uint8_t id, Feedback& f) {
 void StackchanHead::Start(i2c_master_bus_handle_t bus, std::function<void(bool)> pet_display) {
     i2c_bus_ = bus;
     pet_display_ = std::move(pet_display);
-    uint8_t mac[6]{};
-    constexpr uint8_t calibrated_unit[6] = {0x80, 0x45, 0x6b, 0x4d, 0x3a, 0x94};
-    if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK || memcmp(mac, calibrated_unit, 6) != 0) {
-        ESP_LOGE(kTag, "Calibration belongs to another unit; head disabled");
+    calibration_ = LoadCalibration();
+    RegisterTools();
+    if (xTaskCreate([](void* p) { static_cast<StackchanHead*>(p)->Console(); }, "head_console",
+                    4096, this, 1, nullptr) != pdPASS) {
+        ESP_LOGE(kTag, "Local calibration console unavailable; head disabled");
+        return;
+    }
+    if (!calibration_.Valid()) {
+        ESP_LOGW(kTag,
+                 "No per-device calibration. Head disabled; use local head calibrate and restart");
         return;
     }
     i2c_device_config_t power_cfg{};
@@ -131,7 +158,6 @@ void StackchanHead::Start(i2c_master_bus_handle_t bus, std::function<void(bool)>
         ESP_LOGE(kTag, "Factory UART unavailable; head disabled");
         return;
     }
-    RegisterTools();
     if (xTaskCreate([](void* p) { static_cast<StackchanHead*>(p)->PollHeadTouch(); }, "head_touch",
                     4096, this, 2, nullptr) != pdPASS)
         ESP_LOGE(kTag, "Head touch task unavailable");
@@ -139,10 +165,6 @@ void StackchanHead::Start(i2c_master_bus_handle_t bus, std::function<void(bool)>
                     nullptr) != pdPASS) {
         ESP_LOGE(kTag, "Head task unavailable; motion stays disabled");
         return;
-    }
-    if (xTaskCreate([](void* p) { static_cast<StackchanHead*>(p)->Console(); }, "head_console",
-                    4096, this, 1, nullptr) != pdPASS) {
-        ESP_LOGE(kTag, "Local head console unavailable");
     }
 }
 void StackchanHead::RunDanceRgb() {
@@ -258,28 +280,35 @@ void StackchanHead::SetEmotion(const std::string& s) {
 }
 std::string StackchanHead::StatusJson() {
     std::lock_guard<std::mutex> lock(mutex_);
-    char b[512];
-    snprintf(b, sizeof(b),
-             "{\"feedback_valid\":%s,\"armed\":%s,\"approved\":%s,\"fault\":%s,\"automatic\":%s,"
-             "\"state\":\"%s\",\"yaw\":%.2f,\"pitch\":%.2f,\"target_yaw\":%.2f,\"target_pitch\":%."
-             "2f,\"raw_yaw\":%d,\"raw_pitch\":%d,\"fault_reason\":\"%s\","
-             "\"dancing\":%s,\"rgb_ready\":%s}",
-             status_.valid ? "true" : "false", status_.armed ? "true" : "false",
-             status_.approved ? "true" : "false", status_.fault ? "true" : "false",
-             status_.automatic ? "true" : "false",
-             status_.fault ? "fault"
-                           : (status_.recovering
-                                  ? "recovering_communication"
-                                  : (!status_.armed ? "disabled"
-                                                    : (status_.moving ? "moving" : "completed"))),
-             status_.pose.yaw, status_.pose.pitch, status_.target.yaw, status_.target.pitch,
-             status_.raw_yaw, status_.raw_pitch, FaultName(status_.fault_reason),
-             dancing_.load() ? "true" : "false", rgb_ready_.load() ? "true" : "false");
+    char b[640];
+    snprintf(
+        b, sizeof(b),
+        "{\"calibrated\":%s,\"calibration_restart_required\":%s,\"feedback_valid\":%s,\"armed\":%s,"
+        "\"approved\":%s,\"fault\":%s,\"automatic\":%s,"
+        "\"state\":\"%s\",\"yaw\":%.2f,\"pitch\":%.2f,\"target_yaw\":%.2f,\"target_pitch\":%."
+        "2f,\"raw_yaw\":%d,\"raw_pitch\":%d,\"fault_reason\":\"%s\","
+        "\"dancing\":%s,\"rgb_ready\":%s}",
+        calibration_.Valid() ? "true" : "false",
+        calibration_restart_required_.load() ? "true" : "false", status_.valid ? "true" : "false",
+        status_.armed ? "true" : "false", status_.approved ? "true" : "false",
+        status_.fault ? "true" : "false", status_.automatic ? "true" : "false",
+        status_.fault
+            ? "fault"
+            : (status_.recovering
+                   ? "recovering_communication"
+                   : (!status_.armed ? "disabled" : (status_.moving ? "moving" : "completed"))),
+        status_.pose.yaw, status_.pose.pitch, status_.target.yaw, status_.target.pitch,
+        status_.raw_yaw, status_.raw_pitch, FaultName(status_.fault_reason),
+        dancing_.load() ? "true" : "false", rgb_ready_.load() ? "true" : "false");
     return b;
 }
 std::string StackchanHead::Submit(Action action, Pose pose, bool local) {
     std::lock_guard<std::mutex> lock(mutex_);
     const bool stopping = action == Action::Stop || action == Action::EndDance;
+    if (!stopping && (!calibration_.Valid() || calibration_restart_required_.load()))
+        return "rejected: local per-device calibration and restart required";
+    if (action == Action::Approve && (status_.moving || !status_.armed))
+        return "rejected: finish local probes and wait until head is stationary before approval";
     if (!stopping && status_.recovering) {
         if (status_.fault)
             return std::string("rejected: head motion is locked after a fault; fault_reason=") +
@@ -327,11 +356,7 @@ std::string StackchanHead::Submit(Action action, Pose pose, bool local) {
 }
 void StackchanHead::Run() {
     Policy policy;
-    bool approved = false;
-    {
-        Settings settings("head_ctl", false);
-        approved = settings.GetInt("verified", 0) == 1;
-    }
+    bool approved = calibration_.Approved();
     // Position mode must already be configured. Never write angle-limit EEPROM.
     bool mode_ok = true;
     for (uint8_t id : {1, 2}) {
@@ -348,8 +373,10 @@ void StackchanHead::Run() {
         }
         const int low = Word(p.data()), high = Word(p.data() + 2);
         ESP_LOGI(kTag, "Servo %u stored range: %d..%d", id, low, high);
-        const int required_low = id == 1 ? Raw(-30, kYawZero) : Raw(5, kPitchZero);
-        const int required_high = id == 1 ? Raw(30, kYawZero) : Raw(60, kPitchZero);
+        const int required_low =
+            id == 1 ? Raw(-30, calibration_.yaw_zero) : Raw(5, calibration_.pitch_zero);
+        const int required_high =
+            id == 1 ? Raw(30, calibration_.yaw_zero) : Raw(60, calibration_.pitch_zero);
         mode_ok = mode_ok && high > low && low <= required_low && high >= required_high;
         if (Read(id, 26, 2, p))
             ESP_LOGI(kTag, "Servo %u deadband CW=%u CCW=%u ticks", id, p[0], p[1]);
@@ -359,9 +386,11 @@ void StackchanHead::Run() {
     smooth_ui_toolkit::ui_hal::on_get_tick([] { return static_cast<uint32_t>(Now()); });
     Pose current;
     FactoryAxis yaw_axis(
-        kYawZero, -30, 30, [&] { return current.yaw; }, [](int raw) { return Position(1, raw); });
+        calibration_.yaw_zero, -30, 30, [&] { return current.yaw; },
+        [](int raw) { return Position(1, raw); });
     FactoryAxis pitch_axis(
-        kPitchZero, 5, 60, [&] { return current.pitch; }, [](int raw) { return Position(2, raw); });
+        calibration_.pitch_zero, 5, 60, [&] { return current.pitch; },
+        [](int raw) { return Position(2, raw); });
     unsigned current_turn = 0;
     TorqueSafety torque_safety;
     int64_t last_log = 0, last_diagnostic_log = 0;
@@ -371,6 +400,11 @@ void StackchanHead::Run() {
     TickType_t frame_tick = xTaskGetTickCount();
     while (true) {
         bus_alarm = false;
+        if (calibration_restart_required_.load()) {
+            policy.Fault(HeadFault::UnsafeFeedback);
+            inhibit_torque = true;
+            approved = false;
+        }
         if (diagnostics_.exchange(false)) {
             for (uint8_t id : {1, 2}) {
                 Bytes registers;
@@ -385,10 +419,15 @@ void StackchanHead::Run() {
         const bool pitch_ok = FeedbackOf(2, pitch);
         const bool read_ok = yaw_ok && pitch_ok;
         const auto wall_now = Now();
-        const Pose sample{Degrees(yaw.raw, kYawZero), Degrees(pitch.raw, kPitchZero)};
+        const Pose sample{Degrees(yaw.raw, calibration_.yaw_zero),
+                          Degrees(pitch.raw, calibration_.pitch_zero)};
         // Check each valid axis independently, even when its peer has lost communication.
-        const bool unsafe = !mode_ok || (yaw_ok && !Policy::FeedbackSafe({sample.yaw, 10})) ||
-                            (pitch_ok && !Policy::FeedbackSafe({0, sample.pitch}));
+        const bool unsafe =
+            !mode_ok ||
+            (yaw_ok &&
+             (!EncoderPositionSafe(yaw.raw) || !Policy::FeedbackSafe({sample.yaw, 10}))) ||
+            (pitch_ok &&
+             (!EncoderPositionSafe(pitch.raw) || !Policy::FeedbackSafe({0, sample.pitch})));
         const bool overload = (yaw_ok && (yaw.load >= 650 || yaw.current >= 350)) ||
                               (pitch_ok && (pitch.load >= 650 || pitch.current >= 350));
         if (overload && !policy.fault()) {
@@ -427,9 +466,10 @@ void StackchanHead::Run() {
             cmd = command_;
             command_.reset();
         }
-        if (recovery.timed_out() && cmd && cmd->action != Action::Stop &&
-            cmd->action != Action::EndDance) {
-            ESP_LOGW(kTag, "Queued command cancelled: communication timeout");
+        if ((recovery.timed_out() || calibration_restart_required_.load()) && cmd &&
+            cmd->action != Action::Stop && cmd->action != Action::EndDance) {
+            ESP_LOGW(kTag,
+                     "Queued command cancelled: communication timeout or calibration restart");
             cmd.reset();
         }
         if (!ready || !valid) {
@@ -474,14 +514,22 @@ void StackchanHead::Run() {
                     case Action::Arm:
                         policy.Arm(now, false);
                         break;
-                    case Action::Approve:
-                        if (policy.armed()) {
-                            Settings settings("head_ctl", true);
-                            settings.SetInt("verified", 1);
-                            approved = true;
-                            policy.Resume(now);
+                    case Action::Approve: {
+                        // Serialize the persistent approval with local config/revoke writes.
+                        std::lock_guard<std::mutex> lock(mutex_);
+                        if (policy.armed() && !calibration_restart_required_.load()) {
+                            auto saved = calibration_;
+                            saved.verified = 1;
+                            if (SaveCalibration(saved)) {
+                                approved = true;
+                                policy.Resume(now);
+                            } else {
+                                policy.Fault(HeadFault::UnsafeFeedback);
+                                ESP_LOGE(kTag, "Calibration approval not saved; motion disabled");
+                            }
                         }
                         break;
+                    }
                     case Action::Move:
                         policy.Move(cmd->pose, now);
                         break;
@@ -624,6 +672,36 @@ void StackchanHead::Run() {
         vTaskDelayUntil(&frame_tick, pdMS_TO_TICKS(20));
     }
 }
+std::string StackchanHead::ConfigureCalibration(const char* line) {
+    const auto value = ParseCalibrationCommand(line);
+    if (!value)
+        return "rejected: head calibrate <yaw_zero> <pitch_zero>; use this unit's measured factory "
+               "zeros";
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (calibration_restart_required_.load())
+        return "rejected: restart to load the saved calibration before another configuration "
+               "change";
+    if (status_.armed || status_.approved || calibration_.Approved())
+        return "rejected: use head revoke and restart before changing an enabled calibration";
+    if (!SaveCalibration(*value))
+        return "rejected: calibration could not be saved";
+    calibration_restart_required_.store(true);
+    return "saved: approval cleared; restart, inspect read-only feedback, then locally probe both "
+           "axes";
+}
+std::string StackchanHead::RevokeCalibration() {
+    if (!calibration_.Valid())
+        return "rejected: no valid calibration to revoke";
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (calibration_restart_required_.load())
+        return "rejected: restart to load the saved calibration before revoking approval";
+    auto value = calibration_;
+    value.verified = 0;
+    if (!SaveCalibration(value))
+        return "rejected: calibration approval could not be revoked";
+    calibration_restart_required_.store(true);
+    return "saved: approval revoked; motion will stop; restart before calibration changes";
+}
 void StackchanHead::Console() {
     // Local USB console only. No calibration/arming tool is exposed to the AI.
     char line[64];
@@ -638,7 +716,15 @@ void StackchanHead::Console() {
             line[used] = 0;
             used = 0;
             std::string result;
-            if (strcmp(line, "head status") == 0)
+            if (std::strncmp(line, "head calibrate", 14) == 0)
+                result = ConfigureCalibration(line);
+            else if (strcmp(line, "head revoke") == 0)
+                result = RevokeCalibration();
+            else if (strcmp(line, "head calibration") == 0)
+                result = "calibration yaw_zero=" + std::to_string(calibration_.yaw_zero) +
+                         " pitch_zero=" + std::to_string(calibration_.pitch_zero) + " " +
+                         StatusJson();
+            else if (strcmp(line, "head status") == 0)
                 result = StatusJson();
             else if (strcmp(line, "head diag") == 0) {
                 diagnostics_.store(true);

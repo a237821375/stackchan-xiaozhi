@@ -5,6 +5,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include "head_calibration.h"
 #include "motion_policy.h"
 
 class StackchanHead {
@@ -30,6 +31,8 @@ private:
     };
     std::mutex mutex_;
     Status status_;
+    stackchan::HeadCalibration calibration_;
+    std::atomic<bool> calibration_restart_required_{false};
     std::optional<Command> command_;
     std::atomic<bool> speaking_{false};
     std::atomic<unsigned> turn_{0};
@@ -44,6 +47,8 @@ private:
     void Run();
     void Console();
     void RegisterTools();
+    std::string ConfigureCalibration(const char* line);
+    std::string RevokeCalibration();
     std::string StatusJson();
     std::string Submit(Action action, stackchan::Pose pose = {}, bool local = false);
 };
