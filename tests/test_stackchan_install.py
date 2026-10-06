@@ -178,7 +178,9 @@ class InstallTests(unittest.TestCase):
         calls=[]
         expected=b'a'*0x10000+b'b'*0x10000+b'last partial region'
         def read(esp,offset,size,**kwargs):
-            self.assertLessEqual(size,0x10000)
+            # ESP32-S3 stub sends 4096-byte data frames. Keep each request to
+            # one frame; multi-frame streaming failed on the connected K151.
+            self.assertLessEqual(size,0x1000)
             self.assertEqual(kwargs['flash_size'],'16MB')
             calls.append((offset,size))
             return expected[offset-0x9000:offset-0x9000+size]

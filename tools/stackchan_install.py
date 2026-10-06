@@ -173,11 +173,12 @@ class Device:
     def read(self, offset, size):
         if type(offset) is not int or type(size) is not int or offset < 0 or size < 1 or offset + size > FLASH_SIZE:
             raise ValueError('Flash read range is invalid')
-        # Bound each verified transfer. Long streaming reads can lose USB data;
+        # One 4 KiB stub data frame per verified transfer. Multi-frame streams
+        # lost data on the connected K151, even with 64 KiB requests;
         # never return a partial snapshot or retry a corrupted protocol session.
         chunks = []
-        for start in range(offset, offset + size, 0x10000):
-            length = min(0x10000, offset + size - start)
+        for start in range(offset, offset + size, 0x1000):
+            length = min(0x1000, offset + size - start)
             data = self.api.read_flash(self.esp,start,length,flash_size='16MB')
             if data is None or len(data) != length:
                 raise ValueError('Incomplete verified flash read; no snapshot returned')
