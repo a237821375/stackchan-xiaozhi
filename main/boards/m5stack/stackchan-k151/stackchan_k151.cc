@@ -343,7 +343,6 @@ public:
         GetBacklight()->RestoreBrightness();
         head_.Start(i2c_bus_, [this](bool active) {
             static_cast<StackchanDisplay*>(display_)->SetPetting(active);
-            static_cast<CoreS3AudioCodec*>(GetAudioCodec())->SetPetting(active);
         });
     }
 

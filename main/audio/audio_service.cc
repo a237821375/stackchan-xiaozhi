@@ -324,42 +324,13 @@ void AudioService::AudioInputTask() {
 }
 
 void AudioService::AudioOutputTask() {
-    std::vector<int16_t> idle_pcm;
-    if (codec_->HasIdleAudio())
-        idle_pcm.resize(codec_->output_sample_rate() / 50);
-    bool idle_playing = false;
     while (true) {
         std::unique_lock<std::mutex> lock(audio_queue_mutex_);
-        auto ready = [this]() { return !audio_playback_queue_.empty() || service_stopped_.load(); };
-        if (codec_->HasIdleAudio()) {
-            if (!idle_playing)
-                audio_queue_cv_.wait_for(lock, std::chrono::milliseconds(20), ready);
-        } else {
-            audio_queue_cv_.wait(lock, ready);
-        }
+        audio_queue_cv_.wait(
+            lock, [this]() { return !audio_playback_queue_.empty() || service_stopped_.load(); });
         if (service_stopped_.load()) {
             break;
         }
-
-        if (codec_->HasIdleAudio()) {
-            const bool allowed =
-                audio_playback_queue_.empty() && audio_decode_queue_.empty() && !decode_in_flight_;
-            idle_playing = codec_->RenderIdleAudio(idle_pcm, allowed);
-            if (idle_playing) {
-                lock.unlock();
-                if (!codec_->output_enabled()) {
-                    esp_timer_stop(audio_power_timer_);
-                    esp_timer_start_periodic(audio_power_timer_,
-                                             AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
-                    codec_->EnableOutput(true);
-                }
-                codec_->OutputData(idle_pcm);
-                last_output_time_ = std::chrono::steady_clock::now();
-                continue;
-            }
-        }
-        if (audio_playback_queue_.empty())
-            continue;
 
         auto task = std::move(audio_playback_queue_.front());
         audio_playback_queue_.pop_front();

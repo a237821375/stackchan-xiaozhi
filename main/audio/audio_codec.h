@@ -38,11 +38,6 @@ public:
     virtual bool InputData(std::vector<int16_t>& data);
     virtual void Start();
 
-    // Optional local ambience, rendered only by the single output task. Foreground
-    // audio always wins; this path must not signal speech/playback progress.
-    virtual bool HasIdleAudio() const { return false; }
-    virtual bool RenderIdleAudio(std::vector<int16_t>& data, bool allowed) { return false; }
-
     inline bool duplex() const { return duplex_; }
     inline bool input_reference() const { return input_reference_; }
     inline int input_sample_rate() const { return input_sample_rate_; }

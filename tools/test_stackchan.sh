@@ -2,7 +2,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 out_dir=$(mktemp -d /tmp/stackchan-tests.XXXXXX)
-trap 'rm -f "$out_dir/motion" "$out_dir/protocol" "$out_dir/speaking" "$out_dir/factory" "$out_dir/interaction" "$out_dir/purr" "$out_dir/recovery" "$out_dir/dance" "$out_dir/dance_rgb" "$out_dir/servo_diagnostics"; rmdir "$out_dir"' EXIT
+trap 'rm -f "$out_dir/motion" "$out_dir/protocol" "$out_dir/speaking" "$out_dir/factory" "$out_dir/interaction" "$out_dir/recovery" "$out_dir/dance" "$out_dir/dance_rgb" "$out_dir/servo_diagnostics"; rmdir "$out_dir"' EXIT
 clang++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/servo_diagnostics_test.cc -o "$out_dir/servo_diagnostics"
 "$out_dir/servo_diagnostics"
 clang++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/stackchan_dance_test.cc -o "$out_dir/dance"
@@ -11,8 +11,6 @@ clang++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/stac
 "$out_dir/dance_rgb"
 clang++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/feedback_recovery_test.cc -o "$out_dir/recovery"
 "$out_dir/recovery"
-clang++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/purr_loop_test.cc -o "$out_dir/purr"
-"$out_dir/purr"
 clang++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/stackchan_motion_test.cc -o "$out_dir/motion"
 "$out_dir/motion"
 clang++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/stackchan_interaction_test.cc -o "$out_dir/interaction"

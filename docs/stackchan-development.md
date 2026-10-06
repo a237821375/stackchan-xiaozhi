@@ -80,7 +80,7 @@ python tools/build_stackchan_assets.py \
 ## 测试与参与开发
 
 ```sh
-# 主机运动、交互、串口协议、恢复、灯效和音频策略测试
+# 主机运动、交互、串口协议、恢复、灯效和讲话状态测试
 bash tools/test_stackchan.sh
 
 # 上游构建脚本测试

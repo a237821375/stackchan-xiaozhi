@@ -1,25 +1,10 @@
 #include "cores3_audio_codec.h"
-#include "application.h"
-#include "purr_pcm.h"
 
 #include <driver/i2c_master.h>
 #include <driver/i2s_tdm.h>
 #include <esp_log.h>
 
 #define TAG "CoreS3AudioCodec"
-
-bool CoreS3AudioCodec::RenderIdleAudio(std::vector<int16_t>& data, bool allowed) {
-    static stackchan::PurrLoop purr(stackchan::kPurrPcm,
-                                    sizeof(stackchan::kPurrPcm) / sizeof(int16_t), 24000);
-    const bool playing =
-        purr.Render(data.data(), data.size(), petting_.load(),
-                    allowed && Application::GetInstance().GetDeviceState() == kDeviceStateIdle);
-    if (playing != purr_playing_) {
-        purr_playing_ = playing;
-        ESP_LOGI(TAG, "Pet purr %s", playing ? "started" : "stopped");
-    }
-    return playing;
-}
 
 CoreS3AudioCodec::CoreS3AudioCodec(void* i2c_master_handle, int input_sample_rate,
                                    int output_sample_rate, gpio_num_t mclk, gpio_num_t bclk,

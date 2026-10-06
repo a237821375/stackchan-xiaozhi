@@ -105,7 +105,7 @@
 
 - 2026-10-01：完整断电后，一分钟静止采样、一次跳舞和自动待机复测没有出现通信错误或锁定故障。
 - 2026-10-06：Mac M4 ARM64 上主机测试、81 项 Python 构建脚本测试和 ESP-IDF 6.0.1 板卡编译通过。
-- 猫咪呼噜声尚未在实机实现（2026-10-06 用户确认）；仓库保留了音频素材和相关代码尝试，不能将其列为已完成的功能。
+- 猫咪呼噜声尚未在实机实现。2026-10-06 已移除相关运行代码、录音与专用测试；摸头表情和动作保留。
 - 舵机偶发串口错码的根因仍未确定；上述短期测试不能证明长期完全稳定。详细过程见[板卡说明与诊断记录](main/boards/m5stack/stackchan-k151/README.md)。
 
 ## 从哪里开始
@@ -120,6 +120,6 @@
 
 语音对话基础来自 [XiaoZhi ESP32](https://github.com/78/xiaozhi-esp32) v2.5.0，头部驱动与弹簧动画参考 [M5Stack StackChan](https://github.com/m5stack/StackChan)。本项目是个人开发项目。
 
-保留上游 [MIT 许可证](LICENSE)及[原厂依赖的来源与许可](main/boards/m5stack/stackchan-k151/factory_upstream/README.md)。尚未实现的呼噜功能所用录音由 Kerzoven 发布，使用 CC0 1.0，素材和许可记录仍保留，详见[素材来源](main/boards/m5stack/stackchan-k151/PURR_LICENSE.md)。
+保留上游 [MIT 许可证](LICENSE)及[原厂依赖的来源与许可](main/boards/m5stack/stackchan-k151/factory_upstream/README.md)。呼噜音频尝试已从当前版本移除，素材来源和许可可在历史提交中追溯。
 
 请勿提交整机备份、NVS、联网原始日志、密码或 Token。历史设计与交接文件保留在 `docs/` 中，仅用于追溯，当前行为以本首页和板卡说明为准。
