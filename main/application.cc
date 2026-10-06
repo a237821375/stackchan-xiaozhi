@@ -1213,6 +1213,10 @@ void Application::Reboot() {
 }
 
 bool Application::UpgradeFirmware(const std::string& url, const std::string& version) {
+#if CONFIG_DISABLE_CLOUD_FIRMWARE_UPGRADE
+    ESP_LOGW(TAG, "Cloud firmware upgrade disabled for this build; use a verified USB package");
+    return false;
+#endif
     auto& board = Board::GetInstance();
     auto display = board.GetDisplay();
 

@@ -114,6 +114,7 @@ def inputs(root):
     config = {"IDF_TARGET": "esp32s3", "BOARD_TYPE_M5STACK_STACKCHAN_K151": True,
               "ESPTOOLPY_FLASHSIZE": "16MB", "ESPTOOLPY_FLASHSIZE_16MB": True,
               "SPIRAM": True, "SPIRAM_MODE_QUAD": True, "SPIRAM_MODE_OCT": False,
+              "DISABLE_CLOUD_FIRMWARE_UPGRADE": True,
               "ESPTOOLPY_OCT_FLASH": False, "PARTITION_TABLE_OFFSET": 0x8000}
     write_json(build / "config/sdkconfig.json", config)
     sdk = root / "sdk"
@@ -230,6 +231,20 @@ class ReleaseTests(unittest.TestCase):
         (self.build / "xiaozhi.bin").write_bytes(image(chip=0))
         with self.assertRaises(ValueError):
             release.build_package(self.build, self.assets, self.output, "1.2.3")
+
+    def test_cloud_overwrite_protection_is_required_before_package_creation(self):
+        path = self.build / "config/sdkconfig.json"
+        original = json.loads(path.read_text())
+        for value in (False, None):
+            config = dict(original)
+            if value is None:
+                config.pop("DISABLE_CLOUD_FIRMWARE_UPGRADE")
+            else:
+                config["DISABLE_CLOUD_FIRMWARE_UPGRADE"] = value
+            write_json(path, config)
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                release.build_package(self.build, self.assets, self.output, "1.2.3")
+            self.assertFalse(self.output.exists())
 
     def test_flash_encryption_builds_are_rejected_before_package_creation(self):
         path = self.build / "config/sdkconfig.json"

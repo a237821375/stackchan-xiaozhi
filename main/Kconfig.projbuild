@@ -6,6 +6,13 @@ config OTA_URL
     help
         The application will access this URL to check for new firmwares and server address.
 
+config DISABLE_CLOUD_FIRMWARE_UPGRADE
+    bool
+    default n
+    help
+        Keep cloud activation and server configuration, but reject firmware
+        downloads and upgrades. Install verified firmware packages over USB.
+
 choice
     prompt "Flash Assets"
     default FLASH_DEFAULT_ASSETS if !USE_EMOTE_MESSAGE_STYLE
@@ -341,6 +348,7 @@ choice BOARD_TYPE
     config BOARD_TYPE_M5STACK_STACKCHAN_K151
         bool "M5Stack StackChan K151 (calibrated head)"
         depends on IDF_TARGET_ESP32S3
+        select DISABLE_CLOUD_FIRMWARE_UPGRADE
     config BOARD_TYPE_M5STACK_STICK_S3
         bool "M5Stack StickS3"
         depends on IDF_TARGET_ESP32S3

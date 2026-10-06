@@ -106,6 +106,8 @@ def _configuration(build: Path, version: str) -> str:
                 "SPIRAM": True, "SPIRAM_MODE_QUAD": True, "PARTITION_TABLE_OFFSET": 0x8000}
     if any(config.get(key) != value for key, value in required.items()):
         raise ValueError("Build configuration does not target K151 S3/16MB/Quad PSRAM")
+    if config.get("DISABLE_CLOUD_FIRMWARE_UPGRADE") is not True:
+        raise ValueError("K151 release must protect custom firmware from cloud overwrite")
     if any(config.get(key) for key in ("SECURE_FLASH_ENC_ENABLED", "SECURE_FLASH_ENCRYPTION_MODE_RELEASE",
                                        "SECURE_FLASH_ENCRYPTION_MODE_DEVELOPMENT", "SECURE_FLASH_REQUIRE_ALREADY_ENABLED")):
         raise ValueError("Flash encryption builds are unsupported by the portable installer")
