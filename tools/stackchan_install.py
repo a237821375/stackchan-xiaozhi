@@ -178,7 +178,7 @@ class Device:
         chunks = []
         for start in range(offset, offset + size, 0x10000):
             length = min(0x10000, offset + size - start)
-            data = self.api.read_flash(self.esp,start,length,flash_size='16MB',no_progress=True)
+            data = self.api.read_flash(self.esp,start,length,flash_size='16MB')
             if data is None or len(data) != length:
                 raise ValueError('Incomplete verified flash read; no snapshot returned')
             chunks.append(data)
