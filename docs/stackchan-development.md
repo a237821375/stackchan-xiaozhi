@@ -65,7 +65,17 @@ python tools/build_stackchan_assets.py \
 | `self.robot.head_action` | `action`：`nod`、`shake`、`stop`、`resume` |
 | `self.robot.dance` | `action`：`start`、`stop` |
 
-可尝试说“回正”“再抬一点”“点点头”“跳个舞”“停止跳舞”。模型是否正确调用工具需要实际连上服务后验证。返回 `accepted` 只代表入队，实际是否到位应查询反馈。故障锁定时，单纯等待不会自动解除，也不应反复发出恢复指令。
+所有口语示例、触摸操作和可用条件见[交互指令列表](../README.md#交互指令列表)。以下是头部工具的参数映射，方便对照实现：
+
+| 交互 | 工具与参数 |
+| --- | --- |
+| 开始 / 停止跳舞 | `self.robot.dance`：`action=start` / `stop` |
+| 回正 / 抬头 / 低头 / 左看 / 右看 | `self.robot.set_head_pose`：`pose=center` / `up` / `down` / `left` / `right` |
+| 再抬 / 再低 / 再左 / 再右一点 | `self.robot.adjust_head`：分别使用正 / 负的 `pitch_delta` 或负 / 正的 `yaw_delta`，每轴 −10～10 的整数 |
+| 点头 / 摇头 / 停止动作 / 恢复动作 | `self.robot.head_action`：`action=nod` / `shake` / `stop` / `resume` |
+| 查询头部状态 | `self.robot.get_head_position`，无参数 |
+
+返回 `accepted` 只代表入队，实际是否到位应查询反馈。停止跳舞会恢复原姿态并关灯；停止动作会保持当前姿态并暂停自动动作。恢复动作需要已完成本地验收和有效反馈，不会重新开始上一次跳舞。
 
 ## 测试与参与开发
 
