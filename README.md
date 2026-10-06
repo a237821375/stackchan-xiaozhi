@@ -4,6 +4,12 @@
 
 我们希望它聊天时有一点小动作，闲下来会看看周围，被摸头时会抬起脸回应，听到“跳舞”时能摇头晃脑。这些表情与运动交互，是本仓库重点开发的内容。
 
+<p align="center">
+  <img src="docs/images/stackchan-k151.png" width="420" alt="StackChan K151 实机：黑底表情与聆听状态">
+  <br>
+  <sub>StackChan K151 实机展示</sub>
+</p>
+
 ## 我们实现了什么
 
 ### 黑底萌脸，讲话时动嘴
