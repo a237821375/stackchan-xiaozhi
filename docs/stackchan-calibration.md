@@ -16,7 +16,7 @@
 
 1. 启动时缺少有效配置会提示 `No per-device calibration`，不初始化舵机运动、摸头动作或 RGB 工作任务。屏幕与对话仍按自身初始化结果工作。`head status` 的 `calibrated=false`，AI 动作请求会拒绝；禁止通过 AI 跳过验收。
 2. 输入 `head calibrate <yaw_zero> <pitch_zero>`，将占位符换成**本台**原厂零点整数。保存后 `calibration_restart_required=true`，此会话禁止继续启用动作；短按 RST 后重新连接控制台。
-3. 输入 `head calibration` 和 `head status`，核对已载入的零点、`calibrated=true`、`approved=false`。有效配置启动后读取反馈和存储限位，但不会自动回正或使能扭矩。输入 `head diag` 查询诊断寄存器。
+3. 输入 `head calibration` 和 `head status`，核对已载入的零点、`calibrated=true`、`approved=false`。有效配置启动后读取反馈和存储限位，但不会自动回正或使能扭矩。输入 `head diag` 查询诊断寄存器。诊断版本同时报告当轮有效反馈中的 `raw`、`speed_word`、`load_raw`、`current_raw`、`voltage_raw`、`temperature_raw` 和 `moving`；读取失败报告 `feedback unavailable`，不使用旧值。字段为原始寄存器值，不能在未核对本机型号与单位时直接当作安培、伏特或物理转速。此诊断不写舵机 EEPROM，也不增加周期性查询。
 4. 等待 `feedback_valid=true`，确认没有故障，实际姿态与坐标解释吻合。不能在反馈无效、越界、过载或通信异常时继续。
 5. 本地输入 `head arm` 临时启用，再分别输入 `head probe yaw`、`head probe pitch`。每次只增量 2°，观察实际方向、动作与反馈，等停止后再做下一次。`head stop` 可停止。探测触及边界时可能拒绝，需要先按原厂方法核对姿态，不能反复强推。
 6. 两轴小幅探测、回正、机械方向与所需范围都由你确认安全后，在静止状态输入 `head approve`。这是人工验收声明，代码并不自动证明机械范围安全，也不强制记录你是否完成两轴探测。保存成功后启用自动动作；保存失败保持禁用。
