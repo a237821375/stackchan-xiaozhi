@@ -44,6 +44,12 @@ int main() {
     assert(DecodeServoFeedback(feedback_bytes, feedback));
     assert(feedback.raw == 461 && feedback.load == 12 && feedback.current == 7);
     assert(feedback.moving);
+    assert(feedback.speed_word == 0 && feedback.voltage_raw == 50 &&
+           feedback.temperature_raw == 25);
+    feedback_bytes[2] = 0x80;
+    feedback_bytes[3] = 0x13;
+    assert(DecodeServoFeedback(feedback_bytes, feedback));
+    assert(feedback.speed_word == 0x8013);
     feedback_bytes[10] = 0;
     assert(DecodeServoFeedback(feedback_bytes, feedback) && !feedback.moving);
     feedback_bytes.pop_back();

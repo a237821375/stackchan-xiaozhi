@@ -411,7 +411,8 @@ void StackchanHead::Run() {
             inhibit_torque = true;
             approved = false;
         }
-        if (diagnostics_.exchange(false)) {
+        const bool diagnostic_requested = diagnostics_.exchange(false);
+        if (diagnostic_requested) {
             for (uint8_t id : {1, 2}) {
                 Bytes registers;
                 if (Read(id, 40, 8, registers))
@@ -423,6 +424,23 @@ void StackchanHead::Run() {
         Feedback yaw, pitch;
         const bool yaw_ok = FeedbackOf(1, yaw);
         const bool pitch_ok = FeedbackOf(2, pitch);
+        if (diagnostic_requested) {
+            // Use this cycle's existing feedback: no extra UART transactions and
+            // no unit assumptions about current/load/voltage registers.
+            auto report = [](unsigned id, bool valid, const Feedback& f) {
+                if (!valid) {
+                    ESP_LOGW(kTag, "Servo %u feedback unavailable", id);
+                    return;
+                }
+                ESP_LOGI(kTag,
+                         "Servo %u feedback raw=%d speed_word=%d load_raw=%d current_raw=%d "
+                         "voltage_raw=%d temperature_raw=%d moving=%d",
+                         id, f.raw, f.speed_word, f.load, f.current, f.voltage_raw,
+                         f.temperature_raw, f.moving);
+            };
+            report(1, yaw_ok, yaw);
+            report(2, pitch_ok, pitch);
+        }
         const bool read_ok = yaw_ok && pitch_ok;
         const auto wall_now = Now();
         const Pose sample{Degrees(yaw.raw, calibration_.yaw_zero),

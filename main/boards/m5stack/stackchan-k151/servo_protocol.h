@@ -48,11 +48,15 @@ inline int Word(const uint8_t* p) { return (int(p[0]) << 8) | p[1]; }
 struct ServoFeedback {
     int raw = -1, load = 0, current = 0;
     bool moving = false;
+    int speed_word = 0, voltage_raw = 0, temperature_raw = 0;
 };
 inline bool DecodeServoFeedback(const Bytes& bytes, ServoFeedback& feedback) {
     if (bytes.size() != 15)
         return false;
     feedback.raw = Word(bytes.data());
+    feedback.speed_word = Word(bytes.data() + 2);
+    feedback.voltage_raw = bytes[6];
+    feedback.temperature_raw = bytes[7];
     feedback.load = Word(bytes.data() + 4) & 0x3ff;
     feedback.current = Word(bytes.data() + 13) & 0x7fff;
     // SCSCL_MOVING (66) is already inside the position/current read (56..70).
