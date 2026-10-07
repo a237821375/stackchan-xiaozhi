@@ -15,6 +15,13 @@ int main() {
     FactoryStallEvidence low_load;
     for (int t = 50; t <= 2000; t += 50)
         assert(!low_load.Update(500, 550, 10, 0, t));
+    AxisStall watchdog;
+    FactoryStallEvidence low_load_watchdog;
+    for (int t = 0; t <= 2000; t += 50) {
+        const auto reason = ClassifyMotionStop(watchdog.Update(0, 10, t),
+                                               low_load_watchdog.Update(500, 532, 10, 0, t));
+        assert(reason == (t > 1200 ? HeadFault::NoProgress : HeadFault::None));
+    }
     FactoryStallEvidence rising_current;
     assert(!rising_current.Update(500, 550, 0, 0, 50));
     assert(!rising_current.Update(500, 550, 0, 80, 100));
