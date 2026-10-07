@@ -2,9 +2,9 @@ name: StackChan K151
 
 on:
   push:
-    branches: [stackchan-head-control]
+    branches: [master]
   pull_request:
-    branches: [stackchan-head-control]
+    branches: [master]
   workflow_dispatch:
 
 permissions:

@@ -2,7 +2,7 @@
 
 [返回项目首页](../README.md) · [开发指南](stackchan-development.md)
 
-StackChan 专用工作流是 [`.github/workflows/stackchan.yml`](../.github/workflows/stackchan.yml)。它在 `stackchan-head-control` 分支收到 push、目标为该分支的 pull request 和手动触发时运行。上游全板卡工作流 `build.yml` 保留独立的触发条件和 SDK 策略。
+StackChan 专用工作流是 [`.github/workflows/stackchan.yml`](../.github/workflows/stackchan.yml)。它在 `master` 分支收到 push、目标为该分支的 pull request 和手动触发时运行。上游全板卡工作流 `build.yml` 保留独立的触发条件和 SDK 策略。
 
 ## 测试与构建
 

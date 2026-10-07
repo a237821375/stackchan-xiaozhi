@@ -4,10 +4,10 @@
 
 ## 获取源码与构建
 
-当前默认分支为 `stackchan-head-control`。
+当前默认分支为 `master`。
 
 ```sh
-git clone --branch stackchan-head-control https://github.com/a237821375/stackchan-xiaozhi.git
+git clone --branch master https://github.com/a237821375/stackchan-xiaozhi.git
 cd stackchan-xiaozhi
 ```
 

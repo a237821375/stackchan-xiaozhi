@@ -1,6 +1,6 @@
 # StackChan：会回应摸摸头的小机器人
 
-[![StackChan CI](https://github.com/a237821375/stackchan-xiaozhi/actions/workflows/stackchan.yml/badge.svg?branch=stackchan-head-control)](https://github.com/a237821375/stackchan-xiaozhi/actions/workflows/stackchan.yml)
+[![StackChan CI](https://github.com/a237821375/stackchan-xiaozhi/actions/workflows/stackchan.yml/badge.svg?branch=master)](https://github.com/a237821375/stackchan-xiaozhi/actions/workflows/stackchan.yml)
 
 为 **M5Stack StackChan K151 / CoreS3** 开发的机器人固件：黑底萌脸、讲话动嘴、语音控制头部、待机张望、摸头回应，以及跳舞时的 RGB 灯效。
 
@@ -128,7 +128,7 @@
 - [版本记录](CHANGELOG.md)：项目自身版本与升级变化。
 - [贡献与问题反馈](CONTRIBUTING.md)：如何报告问题、提交改动和更新文档。
 
-独立板卡目录为 `m5stack/stackchan-k151`，变体为 `m5stack-stackchan-k151`。使用 ESP-IDF 6.0.1 或以上版本开发；当前默认分支为 `stackchan-head-control`。
+独立板卡目录为 `m5stack/stackchan-k151`，变体为 `m5stack-stackchan-k151`。使用 ESP-IDF 6.0.1 或以上版本开发；当前默认分支为 `master`。
 
 ## 来源与许可
 
