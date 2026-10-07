@@ -45,7 +45,15 @@ private:
 struct Pose {
     float yaw = 0, pitch = 10;
 };
-enum class HeadFault { None, Communication, UnsafeFeedback, ServoAlarm, Stall, Overload };
+enum class HeadFault {
+    None,
+    Communication,
+    UnsafeFeedback,
+    ServoAlarm,
+    Stall,
+    NoProgress,
+    Overload
+};
 inline const char* FaultName(HeadFault reason) {
     switch (reason) {
         case HeadFault::Communication:
@@ -56,11 +64,20 @@ inline const char* FaultName(HeadFault reason) {
             return "servo_alarm";
         case HeadFault::Stall:
             return "mechanical_stall";
+        case HeadFault::NoProgress:
+            return "motion_no_progress";
         case HeadFault::Overload:
             return "overload";
         default:
             return "none";
     }
+}
+inline HeadFault ClassifyMotionStop(bool no_progress, bool stall_evidence) {
+    return stall_evidence ? HeadFault::Stall
+                          : (no_progress ? HeadFault::NoProgress : HeadFault::None);
+}
+inline const char* RemoteMotionBlockReason(bool approved, bool armed) {
+    return !approved ? "local_verification_required" : (!armed ? "motion_not_armed" : "none");
 }
 class Policy {
 public:

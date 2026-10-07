@@ -4,6 +4,8 @@
 
 int main() {
     using namespace stackchan;
+    assert(std::string(PositionName(PositionState(true, true, false, false, {9.375f, 10.3125f},
+                                                  {10, 10}))) == "stopped");
     // Actual failed probe: animation ended, but the encoder never moved.
     PoseCommandResult probe;
     probe.Begin({0.62f, 10.3125f}, {2.f, 12.f});
@@ -12,7 +14,7 @@ int main() {
     assert(!probe.motion_observed());
     assert(!probe.target_reached());
     assert(PositionState(true, true, false, false, {0.62f, 10.3125f}, {2.f, 12.f}) ==
-           PositionOutcome::TargetNotReached);
+           PositionOutcome::Stopped);
 
     // The hardware moving flag must prevent an early completion even at the target.
     PoseCommandResult moving;
@@ -24,11 +26,11 @@ int main() {
     moving.Update({0, 12}, true, false, false);
     assert(moving.finished() && moving.target_reached());
 
-    // Arrival is encoder-precise, independent of the larger stall exclusion threshold.
+    // Stopped state is independent of diagnostic encoder alignment.
     assert(PositionState(true, true, false, false, {-0.3125f, 10.3125f}, {0, 10}) ==
-           PositionOutcome::Completed);
+           PositionOutcome::Stopped);
     assert(PositionState(true, true, false, false, {-0.9375f, 10.3125f}, {0, 10}) ==
-           PositionOutcome::TargetNotReached);
+           PositionOutcome::Stopped);
     assert(PositionState(false, true, false, false, {0, 10}, {0, 10}) ==
            PositionOutcome::Unavailable);
     assert(PositionState(true, false, false, false, {0, 10}, {0, 10}) == PositionOutcome::Disabled);

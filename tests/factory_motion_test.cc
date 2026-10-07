@@ -5,6 +5,7 @@
 #include "../main/boards/m5stack/stackchan-k151/factory_upstream/smooth_ui_toolkit/src/core/hal/hal.hpp"
 #include "../main/boards/m5stack/stackchan-k151/motion_policy.h"
 #include "../main/boards/m5stack/stackchan-k151/motion_result.h"
+#include "../main/boards/m5stack/stackchan-k151/stall_evidence.h"
 
 int main() {
     uint32_t now = 0;
@@ -31,6 +32,39 @@ int main() {
         }
         assert(stackchan::AtTarget({0, pitch}, {0, 12.59f}));
         assert(result.finished() && result.target_reached());
+    }
+    {
+        int written = -1;
+        stackchan::FactoryAxis slow(
+            461, -30, 30, [] { return 0.f; },
+            [&](int raw) {
+                written = raw;
+                return true;
+            });
+        slow.Reset(0);
+        assert(!slow.writtenGoal());
+        slow.Target(5, 400);
+        stackchan::FactoryStallEvidence actual_goal, premature_final_goal;
+        now = 0;
+        for (int i = 1; i <= 3; ++i) {
+            now = i * 60;
+            const int load = (i - 1) * 150;
+            if (slow.writtenGoal())
+                assert(!actual_goal.Update(461, *slow.writtenGoal(), load, 0, now));
+            const bool premature = premature_final_goal.Update(461, 477, load, 0, now);
+            if (i == 3)
+                assert(premature);  // final policy target would falsely classify early acceleration
+            slow.update();
+            assert(slow.writtenGoal() && *slow.writtenGoal() == written);
+        }
+        slow.Reset(0);
+        assert(!slow.writtenGoal());
+        stackchan::FactoryAxis failed(461, -30, 30, [] { return 0.f; }, [](int) { return false; });
+        failed.Reset(0);
+        failed.Target(5);
+        now += 20;
+        failed.update();
+        assert(failed.failed() && !failed.writtenGoal());
     }
     float actual = 27.5f;
     int writes = 0, last = -1;

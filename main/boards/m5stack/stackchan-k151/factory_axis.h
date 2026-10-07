@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <functional>
+#include <optional>
 #include "factory_servo.h"
 
 namespace stackchan {
@@ -17,6 +18,7 @@ public:
         target_ = static_cast<int>(degrees * 10);
         stop_motion_at_angle(target_);
         failed_ = false;
+        written_goal_.reset();
     }
     void Target(float degrees, int speed = 650) {
         const int target =
@@ -28,6 +30,7 @@ public:
     }
     int getCurrentAngle() override { return static_cast<int>(feedback_() * 10); }
     bool failed() const { return failed_; }
+    std::optional<int> writtenGoal() const { return written_goal_; }
     // The final snap is a write even after the spring reports done.
     bool animationPending() { return !_angle_anim.done() || _snap_to_target_on_rest; }
 
@@ -39,11 +42,14 @@ protected:
         // Exact factory 0.1-degree -> SCSCL encoder conversion.
         const int raw = zero_ + angle * 16 / 5 / 10;
         failed_ = !write_(raw);
+        if (!failed_)
+            written_goal_ = raw;
     }
 
 private:
     int zero_, target_ = 0;
     bool failed_ = false;
+    std::optional<int> written_goal_;
     std::function<float()> feedback_;
     std::function<bool(int)> write_;
 };

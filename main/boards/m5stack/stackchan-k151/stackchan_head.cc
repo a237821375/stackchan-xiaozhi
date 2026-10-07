@@ -20,6 +20,7 @@
 #include "mcp_server.h"
 #include "servo_power.h"
 #include "servo_protocol.h"
+#include "stall_evidence.h"
 
 namespace {
 using namespace stackchan;
@@ -288,7 +289,9 @@ std::string StackchanHead::StatusJson() {
         "2f,\"raw_yaw\":%d,\"raw_pitch\":%d,\"fault_reason\":\"%s\","
         "\"dancing\":%s,\"rgb_ready\":%s,\"servo_moving\":%s,"
         "\"pose_command_tracking\":%s,\"pose_command_finished\":%s,"
-        "\"pose_command_motion_observed\":%s,\"pose_command_target_reached\":%s}",
+        "\"pose_command_motion_observed\":%s,\"pose_command_target_reached\":%s,"
+        "\"local_verification_required\":%s,\"remote_motion_block_reason\":\"%s\","
+        "\"yaw_error\":%.2f,\"pitch_error\":%.2f}",
         calibration_.Valid() ? "true" : "false",
         calibration_restart_required_.load() ? "true" : "false", status_.valid ? "true" : "false",
         status_.armed ? "true" : "false", status_.approved ? "true" : "false",
@@ -303,7 +306,10 @@ std::string StackchanHead::StatusJson() {
         status_.pose_command.has_command() ? "true" : "false",
         status_.pose_command.finished() ? "true" : "false",
         status_.pose_command.motion_observed() ? "true" : "false",
-        status_.pose_command.target_reached() ? "true" : "false");
+        status_.pose_command.target_reached() ? "true" : "false",
+        status_.approved ? "false" : "true",
+        RemoteMotionBlockReason(status_.approved, status_.armed),
+        status_.target.yaw - status_.pose.yaw, status_.target.pitch - status_.pose.pitch);
     return b;
 }
 std::string StackchanHead::Submit(Action action, Pose pose, bool local) {
@@ -388,6 +394,7 @@ void StackchanHead::Run() {
     }
     bool first = true, torque = false;
     AxisStall yaw_stall, pitch_stall;
+    FactoryStallEvidence yaw_evidence, pitch_evidence;
     PoseCommandResult pose_command;
     smooth_ui_toolkit::ui_hal::on_get_tick([] { return static_cast<uint32_t>(Now()); });
     Pose current;
@@ -498,6 +505,8 @@ void StackchanHead::Run() {
             cmd.reset();
         }
         if (!ready || !valid) {
+            yaw_evidence.Reset();
+            pitch_evidence.Reset();
             if (cmd && (cmd->action == Action::Stop || cmd->action == Action::EndDance)) {
                 policy.Stop(now);
                 stop_during_gap = inhibit_torque = true;
@@ -531,6 +540,8 @@ void StackchanHead::Run() {
                 current_turn = next_turn;
             }
             if (cmd) {
+                yaw_evidence.Reset();
+                pitch_evidence.Reset();
                 pose_command.Clear();
                 yaw_axis.Reset(current.yaw);
                 pitch_axis.Reset(current.pitch);
@@ -607,14 +618,33 @@ void StackchanHead::Run() {
             if (moving) {
                 const bool yaw_stuck = yaw_stall.Update(current.yaw, target->yaw, now);
                 const bool pitch_stuck = pitch_stall.Update(current.pitch, target->pitch, now);
-                if (yaw_stuck || pitch_stuck) {
-                    policy.Fault(HeadFault::Stall);
+                // Compare feedback to the latest successfully sent spring step,
+                // never to a distant final policy target during acceleration.
+                const auto yaw_goal = yaw_axis.writtenGoal();
+                const auto pitch_goal = pitch_axis.writtenGoal();
+                if (!yaw_goal)
+                    yaw_evidence.Reset();
+                if (!pitch_goal)
+                    pitch_evidence.Reset();
+                const bool yaw_has_evidence =
+                    yaw_goal && yaw_evidence.Update(yaw.raw, *yaw_goal, yaw.load, yaw.current, now);
+                const bool pitch_has_evidence =
+                    pitch_goal &&
+                    pitch_evidence.Update(pitch.raw, *pitch_goal, pitch.load, pitch.current, now);
+                const auto reason = ClassifyMotionStop(yaw_stuck || pitch_stuck,
+                                                       yaw_has_evidence || pitch_has_evidence);
+                if (reason != HeadFault::None) {
+                    policy.Fault(reason);
                     target.reset();
-                    ESP_LOGE(kTag, "Head stopped: mechanical stall=%d/%d", yaw_stuck, pitch_stuck);
+                    ESP_LOGE(kTag, "Head stopped: reason=%s no_progress=%d/%d stall_evidence=%d/%d",
+                             FaultName(reason), yaw_stuck, pitch_stuck, yaw_has_evidence,
+                             pitch_has_evidence);
                 }
             } else {
                 yaw_stall.Reset();
                 pitch_stall.Reset();
+                yaw_evidence.Reset();
+                pitch_evidence.Reset();
             }
             if (target) {
                 torque_safety.BeginWrite();
@@ -823,14 +853,21 @@ void StackchanHead::RegisterTools() {
         "self.robot.get_head_position",
         "Read actual head feedback, target and completion. Robot's own left is negative yaw. "
         "Pitch is factory calibrated; safe forward preset is yaw=0,pitch=10. Never claim "
-        "motion succeeded if feedback is invalid. state=target_not_reached means animation and "
-        "servo stopped without measured arrival; this alone is not a jam and must not trigger "
-        "repeated retries. For the latest explicit pose command, pose_command_finished only "
-        "means it stopped; check pose_command_motion_observed and pose_command_target_reached "
-        "separately. These fields do not certify an entire dance or gesture. "
+        "motion succeeded if feedback is invalid. state=stopped means animation and servo stopped, "
+        "not exact target arrival. yaw_error/pitch_error report residual offset, not a fault. "
+        "local_verification_required means local approval is missing, not a motor fault. "
+        "remote_motion_block_reason only describes approval/arming; also check feedback and fault. "
+        "Never repeatedly retry to eliminate a small residual offset. For the latest explicit pose "
+        "command, pose_command_finished only "
+        "means it stopped; pose_command_motion_observed says actual motion was observed. "
+        "pose_command_target_reached is strict one-encoder-tick alignment diagnostics, not a "
+        "required mechanical accuracy or motion success criterion. These fields do not certify an "
+        "entire dance or gesture. "
         "Read fault_reason: communication_timeout or "
         "recovering_communication is a bus issue, not proof of a jam. Only mechanical_stall "
-        "means measured failure to move. overload means the load/current threshold was exceeded; "
+        "means failure to move with measured load/current evidence. motion_no_progress is a "
+        "conservative stop for lack of progress, not proof of a mechanical jam. overload means the "
+        "load/current threshold was exceeded; "
         "it is not proof of a mechanical jam. If fault=true, motion is locked: waiting will not "
         "restart it. Once power/connection and obstruction are checked and feedback_valid=true, "
         "use head_action resume once and verify status. Never repeatedly resume with invalid "

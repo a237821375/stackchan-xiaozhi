@@ -4,9 +4,10 @@
 
 namespace stackchan {
 // One encoder tick, including the factory integer angle-to-raw conversion.
-// This is an arrival criterion, not a stall or safety threshold.
+// Diagnostic encoder alignment only: not a mechanical accuracy guarantee,
+// action-completion requirement, stall criterion or safety threshold.
 inline constexpr float kArrivalToleranceDegrees = 1.f / 3.2f + 0.0001f;
-enum class PositionOutcome { Unavailable, Disabled, Moving, Completed, TargetNotReached };
+enum class PositionOutcome { Unavailable, Disabled, Moving, Stopped };
 inline bool AtTarget(Pose actual, Pose target) {
     return std::isfinite(actual.yaw) && std::isfinite(actual.pitch) && std::isfinite(target.yaw) &&
            std::isfinite(target.pitch) &&
@@ -14,15 +15,14 @@ inline bool AtTarget(Pose actual, Pose target) {
            std::abs(actual.pitch - target.pitch) <= kArrivalToleranceDegrees;
 }
 inline PositionOutcome PositionState(bool valid, bool armed, bool animation_active,
-                                     bool servo_moving, Pose actual, Pose target) {
+                                     bool servo_moving, Pose, Pose) {
     if (!valid)
         return PositionOutcome::Unavailable;
     if (!armed)
         return PositionOutcome::Disabled;
     if (animation_active || servo_moving)
         return PositionOutcome::Moving;
-    return AtTarget(actual, target) ? PositionOutcome::Completed
-                                    : PositionOutcome::TargetNotReached;
+    return PositionOutcome::Stopped;
 }
 inline const char* PositionName(PositionOutcome state) {
     switch (state) {
@@ -32,10 +32,10 @@ inline const char* PositionName(PositionOutcome state) {
             return "disabled";
         case PositionOutcome::Moving:
             return "moving";
-        case PositionOutcome::Completed:
-            return "completed";
+        case PositionOutcome::Stopped:
+            return "stopped";
         default:
-            return "target_not_reached";
+            return "feedback_unavailable";
     }
 }
 // Records the latest explicit pose command, not a whole dance or automatic behavior.
