@@ -21,6 +21,7 @@
 #include "audio_codec.h"
 #include "audio_debugger.h"
 #include "audio_engine.h"
+#include "duplex_audio_stats.h"
 #include "fixed_queue.h"
 #include "ogg_demuxer.h"
 #include "protocol.h"
@@ -124,7 +125,7 @@ public:
     void EncodeWakeWord();
     std::unique_ptr<AudioStreamPacket> PopWakeWordPacket();
     const std::string& GetLastWakeWord() const;
-    bool IsVoiceDetected() const { return voice_detected_; }
+    bool IsVoiceDetected() const { return voice_detected_.load(); }
     bool IsIdle();
     bool IsPlaybackIdle();
     bool IsWakeWordRunning() const {
@@ -200,7 +201,12 @@ private:
     FixedQueue<uint32_t, MAX_TIMESTAMPS_IN_QUEUE> timestamp_queue_;
 
     bool audio_engine_initialized_ = false;
-    bool voice_detected_ = false;
+    std::atomic<bool> voice_detected_{false};
+    unsigned capture_diag_frames_ = 0, capture_diag_vad_ = 0, capture_diag_peak_ = 0;
+    uint64_t capture_diag_energy_ = 0;
+    size_t capture_diag_samples_ = 0;
+    DuplexAudioStats duplex_input_stats_;
+    int64_t duplex_diag_start_us_ = 0, duplex_feed_max_us_ = 0;
 #if CONFIG_USE_DEVICE_AEC
     bool device_aec_enabled_ = true;
 #else

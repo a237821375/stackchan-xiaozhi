@@ -2,7 +2,13 @@
 set -eu
 cd "$(dirname "$0")/.."
 out_dir=$(mktemp -d /tmp/stackchan-tests.XXXXXX)
-trap 'rm -f "$out_dir/stall_evidence" "$out_dir/motion_result" "$out_dir/motion" "$out_dir/protocol" "$out_dir/speaking" "$out_dir/factory" "$out_dir/interaction" "$out_dir/recovery" "$out_dir/dance" "$out_dir/dance_rgb" "$out_dir/servo_diagnostics" "$out_dir/calibration"; rmdir "$out_dir"' EXIT
+trap 'rm -f "$out_dir/duplex_stats" "$out_dir/touch_point" "$out_dir/pcm_output" "$out_dir/stall_evidence" "$out_dir/motion_result" "$out_dir/motion" "$out_dir/protocol" "$out_dir/speaking" "$out_dir/factory" "$out_dir/interaction" "$out_dir/recovery" "$out_dir/dance" "$out_dir/dance_rgb" "$out_dir/servo_diagnostics" "$out_dir/calibration"; rmdir "$out_dir"' EXIT
+clang++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/duplex_audio_stats_test.cc -o "$out_dir/duplex_stats"
+"$out_dir/duplex_stats"
+clang++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/touch_point_test.cc -o "$out_dir/touch_point"
+"$out_dir/touch_point"
+clang++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/cores3_pcm_output_test.cc -o "$out_dir/pcm_output"
+"$out_dir/pcm_output"
 clang++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/stall_evidence_test.cc -o "$out_dir/stall_evidence"
 "$out_dir/stall_evidence"
 clang++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/motion_result_test.cc -o "$out_dir/motion_result"

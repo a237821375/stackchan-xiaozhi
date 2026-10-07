@@ -31,6 +31,36 @@ AI 工具：`self.robot.get_head_position`、`self.robot.set_head_pose`、`self.
 运行时舵机反馈、位置和扭矩操作遇到通信校验/超时错误时，等待20ms并清除迟到数据后只重试一次。相同位置和扭矩写入可重复执行；舵机报警不重试。重试失败先暂停运动并冻结策略时钟，连续3组两轴完整、有效反馈后，从实测角度重置弹簧并继续；总恢复期限500ms不会被再次丢包或写入失败延长。恢复期间不发送新位置/使能命令，不把缺失值-1转换为角度，不用旧反馈继续运动。保持最后一个已发送的小步目标；超过期限则锁定故障并尝试释放扭矩。Stop始终取消待恢复动作，暂停时Stop会释放扭矩且恢复后禁止自动使能。确认的报警、超载、越界立即锁定，恢复通信不会清除这些保护。状态区分recovering_communication、communication_timeout、mechanical_stall、overload、servo_alarm、unsafe_feedback_or_configuration，AI不可将通信异常直接描述为机械卡住。
 
 UART适配层将原厂FTServo分段构造的请求缓存为单帧后一次发送，接收使用ESP-IDF缓冲阻塞读取，避免逐字节零tick轮询。原厂包格式、校验和Servo动画保持不变；该传输适配仍需实机验证其对偶发通信错误的改善。
+## 语音插话（实验功能，单台部分验收）
+
+用户已确认当前恢复后的 realtime 版本不再自行打断，播放音量 **60% 时可以正常插话并使用；80% 时需要明显提高说话音量**。60% 是单台实测建议，未设强制上限或改写已有音量。短词和句首识别仍有错误，长期稳定性未通过；已有 alpha.2 Release 不包含本项改动。使用步骤、识别样例和重启问题见[插话说明与实测限制](../../../../docs/stackchan-voice-interruption.md)。
+
+本轮仍出现 AEC 调度看门狗告警，以及 AXP2101 电池状态读取超时触发 abort 的重启；电池读取容错尚未修复。下面 FT6336 的可恢复读取只覆盖触摸轮询，不代表电池读取也已具备容错。
+
+K151 构建默认启用设备端 AEC 和现有 `realtime` 对话模式，连续上传经过 AFE/AEC 处理的音频，由小智服务端处理插话。之前额外叠加的 360 毫秒连续人声确认、PCM 延迟缓存和静音替换已撤除，避免拦截短句和带停顿的语音。已有 VAD 继续报告人声状态，但不再改变上传数据。当前使用 WebRTC VAD，尚未切换 VADNet，也未增加本地 VAD 自动 abort。每秒只记录帧数、VAD 状态统计与处理后峰值，不保存音频。官方 `vad_cache` 是分段上传补回句首的机制；连续上传不能重复补入同一段音频。[Espressif VAD 文档](https://docs.espressif.com/projects/esp-sr/en/latest/esp32s3/vadnet/README.html)。
+
+FT6336 触摸轮询已移到独立的低优先级任务；20 毫秒定时器只发送任务通知，不在回调中同步读取 I2C。任务合并迟到通知，避免补跑旧轮询；读取失败仍跳过样本并取消未完成的短触识别。该变更依据[ESP Timer 回调要求](https://docs.espressif.com/projects/esp-idf/en/v6.0.1/esp32s3/api-reference/system/esp_timer.html)。它消除了触摸读取阻塞共享定时器的调用路径，不代表已消除 AEC 负载引发的全部 CPU 0 看门狗警告。插话可靠性、误触发率、负载与原有交互仍须实机验收。
+
+CoreS3 官方原理图的 ES7210 MIC1 接麦克风，MIC3 接扬声器的电气回声参考。TDM I2S 的线上顺序是 MIC1、MIC3、MIC2、MIC4，接收掩码按时隙编号，增益接口按 ADC 编号，两者不可混用。启用 AEC 时使用四时隙 TDM、选择时隙 0 和 1（掩码 0x3），向 AFE 提供 `MR` 顺序的两路 PCM；MIC3 增益则通过 ADC 索引 2 设为 0 dB。RX/TX 共用 64fs 时钟，因此扬声器使用两时隙、32 位格式，由 AW88298 驱动同时设置位宽和 BCK 比例。设备内部的 16 位 PCM 经有界分块转换为高位对齐的有符号 32 位样本，不改变音量，不在播放路径分配堆内存。关闭 AEC 时保持原有 16 位播放路径。
+
+初次试验选择时隙 0 和 2（掩码 0x5），用户报告无法收音；随后改为四时隙、掩码 0x3，用户确认收音恢复但扬声器无声。这两份试验固件均未通过验收。同步为 32 位播放后用户确认收音和声音恢复，但报告插话过于灵敏，完整日志还发现 FT6336 触摸芯片读取超时触发 ESP_ERROR_CHECK 导致整机重启。因此该版本仍未通过验收。新版本为运行中的触摸轮询改用可恢复的读取结果：超时跳过本次样本并取消未完成的短触识别，避免使用旧数据或合成触摸释放；运行时触摸读取错误不再主动退出程序。触摸交互调度回应用主任务。此处理避免已确认的致命错误路径，不等同于证明 I2C 超时的底层原因已消除。仅缩回两时隙的方案因不能保证正确的参考通道而放弃，未烧录到设备。参见[原理图第 4 页](https://m5stack-doc.oss-cn-shenzhen.aliyuncs.com/490/Sch_M5_CoreS3_v1.0.pdf)、[ES7210 数据手册第 8 页](https://files.waveshare.com/wiki/common/ES7210_DS.pdf)、[Espressif 通道映射实现](https://github.com/espressif/esp-audio-dev/blob/main/esp_codec_dev/device/es7210/es7210.c)与[ESP-SR AEC 文档](https://docs.espressif.com/projects/esp-sr/en/latest/esp32s3/acoustic_echo_cancellation/README.html)。
+
+需要对真实设备检查：收音、播放、唤醒；机器人讲话中直接插话；不插话时是否自己打断自己；连续插话；断网重连；原有表情和运动功能。回声参考接线、输入增益和扬声器音量都会影响结果。当前 AFE 的 FD_LOW_COST / VERYAGGR 参数保持原值，后续依据实测调整。
+
+如需回退到等说完再收音，可在标准构建命令后追加 `--build-options-json '{"aec_mode":"off"}'`，此时禁用设备端 AEC 和参考输入；不会改动个人绑定与头部校准。
+
 ## 历史开发与诊断记录
 
 [2026-10-01 的实验、回退与断电复测](../../../../docs/stackchan-history/MOTION-20261001.md)。串口错码根因尚未确定，短时恢复不能证明长期稳定。
+
+### 回声链路诊断（未验收）
+
+当前开发版新增 `RawDuplex` 数值日志，在 `esp_codec_dev_read` 返回后、重采样前统计原始 24 kHz MR 输入：每秒样本数、两路 RMS、达到 int16 上下限的样本数、播放音量和麦克风增益。`DuplexInput` 则报告重采样到 16 kHz 后的满幅样本数，用于区分采集/格式问题和重采样阶段的变化。达到满幅只表示采样触及边界，不能单独证明模拟 ADC 削波或其原因。
+
+原始输入另以 1/8 抽样统计 Pearson 相关系数，比较参考领先麦克风 0、24、48、120、240 个样本（24 kHz 下 0、1、2、5、10 ms），输出绝对相关性最大的候选及带符号的千分值。仅使用 241 个参考样本的易失环形窗口，不保存录音。这个粗略数值不是完整的延迟估计、ERLE 或验收标准；低相关可能来自错路、时序、噪声或非线性失真，需要安静播放对照。
+
+依据 [Espressif 音频 FAQ](https://docs.espressif.com/projects/esp-faq/en/latest/application-solution/audio-development-framework.html)，先验证录放音与有效参考信号，再调整 AEC。上游 CoreS3 的 `AUDIO_INPUT_REFERENCE=false` 与原厂 StackChan 的 `true` 不同，不能把板型支持等同于全双工插话已验证。本次诊断不改变采样映射、增益、AEC 或 VAD 参数。
+
+### 撤回本地 VAD 自动停播试验
+
+先停播再收音试验改用了本地 120 ms VAD 触发和云端 auto 收句，超出了只丢弃触发前音频的需求。实机出现自身声音误触发，以及实际播放开始前上一句话的 VAD 状态触发。该试验未通过验收，相关策略、队列与 TTS 防护改动均撤回，恢复此前的云端 realtime 持续输入方式。保留原始收音数值诊断与摸头独立任务。仍不能宣称此前 AEC 的自身回声或识别准确率问题已解决。

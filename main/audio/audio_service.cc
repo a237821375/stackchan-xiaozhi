@@ -85,6 +85,27 @@ void AudioService::Initialize(AudioCodec* codec) {
     audio_engine_ = std::make_unique<LiteAudioEngine>();
 #endif
     audio_engine_->OnOutput([this](std::vector<int16_t>&& data) {
+#if CONFIG_BOARD_TYPE_M5STACK_STACKCHAN_K151 && CONFIG_USE_DEVICE_AEC
+        // Observe the continuous AEC output without muting, delaying or replaying it.
+        ++capture_diag_frames_;
+        capture_diag_vad_ += voice_detected_.load();
+        for (int16_t sample : data) {
+            const unsigned magnitude = sample < 0 ? -static_cast<int>(sample) : sample;
+            capture_diag_peak_ = std::max(capture_diag_peak_, magnitude);
+            capture_diag_energy_ += static_cast<int64_t>(sample) * sample;
+        }
+        capture_diag_samples_ += data.size();
+        if (capture_diag_frames_ >= 17) {
+            const unsigned rms =
+                capture_diag_samples_
+                    ? std::sqrt(static_cast<double>(capture_diag_energy_) / capture_diag_samples_)
+                    : 0;
+            ESP_LOGI(TAG, "RealtimeCapture: frames=%u vad=%u peak=%u rms=%u", capture_diag_frames_,
+                     capture_diag_vad_, capture_diag_peak_, rms);
+            capture_diag_frames_ = capture_diag_vad_ = capture_diag_peak_ = 0;
+            capture_diag_energy_ = capture_diag_samples_ = 0;
+        }
+#endif
         PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(data));
     });
     audio_engine_->OnVadStateChange([this](bool speaking) {
@@ -311,7 +332,33 @@ void AudioService::AudioInputTask() {
             int samples = 160;  // 10ms
             std::vector<int16_t> data;
             if (ReadAudioData(data, 16000, samples)) {
+#if CONFIG_BOARD_TYPE_M5STACK_STACKCHAN_K151 && CONFIG_USE_DEVICE_AEC
+                const int64_t feed_start = esp_timer_get_time();
+                if (duplex_diag_start_us_ == 0)
+                    duplex_diag_start_us_ = feed_start;
+                if (codec_->input_channels() == 2)
+                    duplex_input_stats_.Add(data.data(), data.size());
+#endif
                 audio_engine_->Feed(std::move(data));
+#if CONFIG_BOARD_TYPE_M5STACK_STACKCHAN_K151 && CONFIG_USE_DEVICE_AEC
+                const int64_t now = esp_timer_get_time();
+                duplex_feed_max_us_ = std::max(duplex_feed_max_us_, now - feed_start);
+                if (duplex_input_stats_.frames() >= 16000) {
+                    ESP_LOGI(TAG,
+                             "DuplexInput: frames=%u interval_ms=%u mic_rms=%u ref_rms=%u "
+                             "mic_peak=%u ref_peak=%u mic_full=%u ref_full=%u feed_max_us=%u",
+                             static_cast<unsigned>(duplex_input_stats_.frames()),
+                             static_cast<unsigned>((now - duplex_diag_start_us_) / 1000),
+                             duplex_input_stats_.mic_rms(), duplex_input_stats_.ref_rms(),
+                             duplex_input_stats_.mic_peak(), duplex_input_stats_.ref_peak(),
+                             static_cast<unsigned>(duplex_input_stats_.mic_full_scale()),
+                             static_cast<unsigned>(duplex_input_stats_.ref_full_scale()),
+                             static_cast<unsigned>(duplex_feed_max_us_));
+                    duplex_input_stats_.Reset();
+                    duplex_diag_start_us_ = now;
+                    duplex_feed_max_us_ = 0;
+                }
+#endif
                 continue;
             }
         }

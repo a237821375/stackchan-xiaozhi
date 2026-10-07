@@ -5,7 +5,11 @@
 
 #include <driver/gpio.h>
 
+#if CONFIG_USE_DEVICE_AEC
+#define AUDIO_INPUT_REFERENCE true
+#else
 #define AUDIO_INPUT_REFERENCE false
+#endif
 #define AUDIO_INPUT_SAMPLE_RATE 24000
 #define AUDIO_OUTPUT_SAMPLE_RATE 24000
 

@@ -10,6 +10,9 @@
                 "camera_vflip": false
             },
             "sdkconfig_append": [
+                "CONFIG_USE_AUDIO_PROCESSOR=y",
+                "CONFIG_USE_DEVICE_AEC=y",
+                "CONFIG_USE_SERVER_AEC=n",
                 "CONFIG_SPIRAM_MODE_QUAD=y",
                 "CONFIG_CAMERA_GC0308=y",
                 "CONFIG_CAMERA_GC0308_AUTO_DETECT_DVP_INTERFACE_SENSOR=y",

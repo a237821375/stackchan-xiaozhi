@@ -1,4 +1,5 @@
 #include "cores3_audio_codec.h"
+#include "cores3_pcm_output.h"
 
 #include <driver/i2c_master.h>
 #include <driver/i2s_tdm.h>
@@ -180,17 +181,26 @@ void CoreS3AudioCodec::EnableInput(bool enable) {
     if (enable) {
         esp_codec_dev_sample_info_t fs = {
             .bits_per_sample = 16,
-            .channel = 2,
+            // TDM wire order is MIC1, MIC3, MIC2, MIC4, not ADC order.
+            .channel = static_cast<uint8_t>(input_reference_ ? 4 : 2),
             .channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0),
             .sample_rate = (uint32_t)output_sample_rate_,
             .mclk_multiple = 0,
         };
         if (input_reference_) {
+            // DMA slot 1 carries MIC3. The gain API below uses ADC index 2.
             fs.channel_mask |= ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1);
         }
         ESP_ERROR_CHECK(esp_codec_dev_open(input_dev_, &fs));
         ESP_ERROR_CHECK(esp_codec_dev_set_in_channel_gain(
             input_dev_, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0), input_gain_));
+        if (input_reference_) {
+            // The electrical speaker reference must not inherit microphone gain.
+            ESP_ERROR_CHECK(esp_codec_dev_set_in_channel_gain(
+                input_dev_, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(2), 0.0f));
+        }
+        ESP_LOGI(TAG, "Capture: slots=%u mask=0x%x format=%s", fs.channel, fs.channel_mask,
+                 input_reference_ ? "MR" : "M");
     } else {
         ESP_ERROR_CHECK(esp_codec_dev_close(input_dev_));
     }
@@ -202,9 +212,10 @@ void CoreS3AudioCodec::EnableOutput(bool enable) {
         return;
     }
     if (enable) {
-        // Play 16bit 1 channel
+        // Four 16-bit RX slots and two 32-bit TX slots share a 64fs clock.
+        // The AW88298 driver configures both sample width and BCK ratio here.
         esp_codec_dev_sample_info_t fs = {
-            .bits_per_sample = 16,
+            .bits_per_sample = static_cast<uint8_t>(input_reference_ ? 32 : 16),
             .channel = 1,
             .channel_mask = 0,
             .sample_rate = (uint32_t)output_sample_rate_,
@@ -212,6 +223,7 @@ void CoreS3AudioCodec::EnableOutput(bool enable) {
         };
         ESP_ERROR_CHECK(esp_codec_dev_open(output_dev_, &fs));
         ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(output_dev_, output_volume_));
+        ESP_LOGI(TAG, "Playback: bits=%u mono volume=%d", fs.bits_per_sample, output_volume_);
     } else {
         ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
     }
@@ -220,14 +232,39 @@ void CoreS3AudioCodec::EnableOutput(bool enable) {
 
 int CoreS3AudioCodec::Read(int16_t* dest, int samples) {
     if (input_enabled_) {
-        ESP_ERROR_CHECK_WITHOUT_ABORT(
-            esp_codec_dev_read(input_dev_, (void*)dest, samples * sizeof(int16_t)));
+        const auto result = esp_codec_dev_read(input_dev_, (void*)dest, samples * sizeof(int16_t));
+        ESP_ERROR_CHECK_WITHOUT_ABORT(result);
+        if (result != ESP_CODEC_DEV_OK)
+            return 0;
+        if (input_reference_ && samples > 0) {
+            raw_input_stats_.Add(dest, samples, true);
+            if (raw_input_stats_.frames() >= static_cast<size_t>(input_sample_rate_)) {
+                ESP_LOGI(TAG,
+                         "RawDuplex: frames=%u mic_rms=%u ref_rms=%u mic_full=%u ref_full=%u "
+                         "corr_permille=%d lag_samples=%u volume=%d gain_db=%d",
+                         static_cast<unsigned>(raw_input_stats_.frames()),
+                         raw_input_stats_.mic_rms(), raw_input_stats_.ref_rms(),
+                         static_cast<unsigned>(raw_input_stats_.mic_full_scale()),
+                         static_cast<unsigned>(raw_input_stats_.ref_full_scale()),
+                         raw_input_stats_.correlation_permille(),
+                         raw_input_stats_.correlation_lag_samples(), output_volume_,
+                         static_cast<int>(input_gain_));
+                raw_input_stats_.Reset();
+            }
+        }
     }
     return samples;
 }
 
 int CoreS3AudioCodec::Write(const int16_t* data, int samples) {
     if (output_enabled_) {
+        if (input_reference_) {
+            return WriteCoreS3Pcm32(data, samples, [this](const int32_t* pcm, size_t bytes) {
+                auto result = esp_codec_dev_write(output_dev_, (void*)pcm, bytes);
+                ESP_ERROR_CHECK_WITHOUT_ABORT(result);
+                return result == ESP_CODEC_DEV_OK;
+            });
+        }
         ESP_ERROR_CHECK_WITHOUT_ABORT(
             esp_codec_dev_write(output_dev_, (void*)data, samples * sizeof(int16_t)));
     }

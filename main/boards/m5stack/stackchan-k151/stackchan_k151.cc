@@ -6,6 +6,7 @@
 #include "i2c_device.h"
 #include "power_save_timer.h"
 #include "stackchan_display.h"
+#include "touch_point.h"
 #include "wifi_board.h"
 
 #include <driver/i2c_master.h>
@@ -14,6 +15,8 @@
 #include <esp_lcd_panel_ops.h>
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include "esp_video.h"
 
 #define TAG "StackchanK151Board"
@@ -85,32 +88,26 @@ public:
 
 class Ft6336 : public I2cDevice {
 public:
-    struct TouchPoint_t {
-        int num = 0;
-        int x = -1;
-        int y = -1;
-    };
-
     Ft6336(i2c_master_bus_handle_t i2c_bus, uint8_t addr) : I2cDevice(i2c_bus, addr) {
         uint8_t chip_id = ReadReg(0xA3);
         ESP_LOGI(TAG, "Get chip ID: 0x%02X", chip_id);
-        read_buffer_ = new uint8_t[6];
     }
 
-    ~Ft6336() { delete[] read_buffer_; }
-
-    void UpdateTouchPoint() {
-        ReadRegs(0x02, read_buffer_, 6);
-        tp_.num = read_buffer_[0] & 0x0F;
-        tp_.x = ((read_buffer_[1] & 0x0F) << 8) | read_buffer_[2];
-        tp_.y = ((read_buffer_[3] & 0x0F) << 8) | read_buffer_[4];
+    bool UpdateTouchPoint() {
+        return tp_.Read([this](unsigned char* buffer) {
+            const uint8_t reg = 0x02;
+            const esp_err_t error =
+                i2c_master_transmit_receive(i2c_device_, &reg, 1, buffer, 6, 20);
+            if (error != ESP_OK && (++read_failures_ == 1 || read_failures_ % 50 == 0))
+                ESP_LOGW(TAG, "Touch read failed: %s", esp_err_to_name(error));
+            return error == ESP_OK;
+        });
     }
-
-    inline const TouchPoint_t& GetTouchPoint() { return tp_; }
+    const TouchPoint& GetTouchPoint() const { return tp_; }
 
 private:
-    uint8_t* read_buffer_ = nullptr;
-    TouchPoint_t tp_;
+    TouchPoint tp_;
+    unsigned read_failures_ = 0;
 };
 
 class StackchanK151Board : public WifiBoard {
@@ -123,6 +120,7 @@ private:
     LcdDisplay* display_;
     EspVideo* camera_;
     esp_timer_handle_t touchpad_timer_;
+    TaskHandle_t touchpad_task_ = nullptr;
     PowerSaveTimer* power_save_timer_;
 
     void InitializePowerSaveTimer() {
@@ -194,7 +192,11 @@ private:
         static int64_t touch_start_time = 0;
         const int64_t TOUCH_THRESHOLD_MS = 500;  // 触摸时长阈值，超过500ms视为长按
 
-        ft6336_->UpdateTouchPoint();
+        if (!ft6336_->UpdateTouchPoint()) {
+            // Lost samples must not synthesize a short touch release.
+            was_touched = false;
+            return;
+        }
         auto& touch_point = ft6336_->GetTouchPoint();
 
         // 检测触摸开始
@@ -214,7 +216,7 @@ private:
                     EnterWifiConfigMode();
                     return;
                 }
-                app.ToggleChatState();
+                app.Schedule([] { Application::GetInstance().ToggleChatState(); });
             }
         }
     }
@@ -223,12 +225,25 @@ private:
         ESP_LOGI(TAG, "Init FT6336");
         ft6336_ = new Ft6336(i2c_bus_, 0x38);
 
-        // 创建定时器，20ms 间隔
+        // I2C may wait on the bus. Keep it out of the shared, high-priority timer task.
+        BaseType_t created = xTaskCreate(
+            [](void* arg) {
+                auto* board = static_cast<StackchanK151Board*>(arg);
+                while (true) {
+                    // Clear all accumulated ticks: do not replay stale touch polls.
+                    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+                    board->PollTouchpad();
+                }
+            },
+            "touchpad_poll", 3072, this, 2, &touchpad_task_);
+        ESP_ERROR_CHECK(created == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
+
+        // The timer callback only wakes the worker; it never reads I2C.
         esp_timer_create_args_t timer_args = {
             .callback =
                 [](void* arg) {
                     StackchanK151Board* board = (StackchanK151Board*)arg;
-                    board->PollTouchpad();
+                    xTaskNotifyGive(board->touchpad_task_);
                 },
             .arg = this,
             .dispatch_method = ESP_TIMER_TASK,

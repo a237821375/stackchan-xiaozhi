@@ -1124,6 +1124,32 @@ class BuildOptionTests(unittest.TestCase):
         finally:
             os.chdir(previous_cwd)
 
+    def test_stackchan_defaults_to_device_aec_and_can_disable_it(self):
+        # Missing Kconfig eligibility must not silently turn off full-duplex
+        # capture in the canonical K151 build.
+        config = json.loads(
+            (ROOT / "main/boards/m5stack/stackchan-k151/config.json").read_text()
+        )
+        variant = config["builds"][0]
+        board = build._resolve_board_config(
+            "m5stack/stackchan-k151", config["target"],
+            variant["sdkconfig_append"], variant_name=variant["name"],
+        )
+        definitions = build._build_option_definitions(
+            "m5stack/stackchan-k151", config["target"], board, variant,
+        )
+        defaults = build._normalize_build_options(definitions, {})
+        self.assertEqual(defaults.get("aec_mode"), "device")
+        assignments = build._sdkconfig_assignments(variant["sdkconfig_append"])
+        enabled = build._build_options_sdkconfig(definitions, defaults, assignments)
+        self.assertIn("CONFIG_USE_DEVICE_AEC=y", enabled)
+        self.assertIn("CONFIG_USE_AUDIO_PROCESSOR=y", enabled)
+        self.assertIn("CONFIG_USE_SERVER_AEC=n", enabled)
+        disabled = build._normalize_build_options(definitions, {"aec_mode": "off"})
+        options = build._build_options_sdkconfig(definitions, disabled, assignments)
+        self.assertIn("CONFIG_USE_DEVICE_AEC=n", options)
+        self.assertIn("CONFIG_USE_SERVER_AEC=n", options)
+
     def test_lcd_board_exposes_curated_display_options(self):
         config = json.loads(
             (ROOT / "main/boards/bread-compact-esp32-lcd/config.json").read_text(
