@@ -89,6 +89,15 @@ class PreservationTests(AssetApiTestCase):
         with self.assertRaises(ValueError):
             assets.replace_emojis(self.base, self.gifs)
 
+    def test_status_text_remains_visible_on_black_background_in_both_themes(self):
+        self.index["skin"]["light"] = {"text_color": "#000000"}
+        self.base["index.json"] = (json.dumps(self.index).encode(), 0, 0)
+        index = json.loads(assets.replace_emojis(self.base, self.gifs)["index.json"][0])
+        for mode in ("light", "dark"):
+            with self.subTest(mode=mode):
+                self.assertEqual(index["skin"][mode]["background_color"], "#000000")
+                self.assertEqual(index["skin"][mode].get("text_color"), "#FFFFFF")
+
     def test_partition_limit_is_enforced(self):
         with self.assertRaises(ValueError):
             assets.pack_assets({"huge.bin": (bytes(0x800000), 0, 0)})

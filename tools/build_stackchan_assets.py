@@ -129,6 +129,7 @@ def replace_emojis(base_files, gifs):
     skin = index.setdefault("skin", {})
     for mode in ("light", "dark"):
         skin.setdefault(mode, {})["background_color"] = "#000000"
+        skin[mode]["text_color"] = "#FFFFFF"
     files["index.json"] = (json.dumps(index, separators=(",", ":")).encode(), 0, 0)
     return files
 
